@@ -1221,22 +1221,36 @@ function buildWorkerSource() {
   const handler = `
     self.onmessage = function(e) {
       const d = e.data;
-      Object.assign(PARAMS, d.params);
-      if (d.netPriors) {
-        globalThis.policyNet = {
-          _netPriors: new Float32Array(d.netPriors),
-          _netHidden: null, _netInp: null,
-          _netBlend: d.netBlend, _gameBuffer: [],
-          blendWeight: d.netBlend
-        };
+      /* Absicherung: manche mobilen WebViews feuern Worker.onerror nicht
+         zuverlässig bei geworfenen Exceptions — der Spinner würde dann
+         für immer hängen, ohne dass irgendein Fehler sichtbar wird.
+         Deshalb fängt der Worker sich selbst ab und meldet IMMER etwas
+         zurück, auch im Fehlerfall. */
+      try {
+        Object.assign(PARAMS, d.params);
+        if (d.netPriors) {
+          globalThis.policyNet = {
+            _netPriors: new Float32Array(d.netPriors),
+            _netHidden: null, _netInp: null,
+            _netBlend: d.netBlend, _gameBuffer: [],
+            blendWeight: d.netBlend
+          };
+        }
+        const histSet = new Set(d.histHashes);
+        const result = getAIMove(
+          new Uint8Array(d.board), d.aiColor, histSet,
+          d.captures, d.mc, 'hard', d.reqId
+        );
+        if (globalThis.policyNet) globalThis.policyNet._netPriors = null;
+        self.postMessage({...result, reqId: d.reqId});
+      } catch (err) {
+        self.postMessage({
+          type: 'workerError',
+          message: (err && err.message) || String(err),
+          stack: (err && err.stack) || '',
+          reqId: d.reqId
+        });
       }
-      const histSet = new Set(d.histHashes);
-      const result = getAIMove(
-        new Uint8Array(d.board), d.aiColor, histSet,
-        d.captures, d.mc, 'hard', d.reqId
-      );
-      if (globalThis.policyNet) globalThis.policyNet._netPriors = null;
-      self.postMessage({...result, reqId: d.reqId});
     };`;
   return aiSrc + '\n' + handler;
 }
@@ -1263,6 +1277,17 @@ function fallbackToMainThread(reqId, netInp, netPriors, netHidden) {
 function attachWorkerHandlers() {
   state.aiWorker.onmessage = function(e) {
     const ctx = state.aiWorkerCtx;
+    /* Selbst abgefangener Fehler aus dem Worker (siehe buildWorkerSource):
+       genauso behandeln wie ein echtes onerror-Event, da manche mobilen
+       WebViews onerror bei geworfenen Exceptions nicht zuverlässig feuern. */
+    if (e.data && e.data.type === 'workerError') {
+      console.error('[Worker] Interner Fehler:', e.data.message, e.data.stack || '');
+      state.workerDead = true;
+      cleanupWorker();
+      fallbackToMainThread(e.data.reqId,
+        ctx ? ctx.netInp : null, ctx ? ctx.netPriors : null, ctx ? ctx.netHidden : null);
+      return;
+    }
     applyAIResult(e.data, e.data.reqId,
       ctx ? ctx.netInp : null, ctx ? ctx.netPriors : null, ctx ? ctx.netHidden : null);
   };
@@ -1330,6 +1355,21 @@ function triggerAIMove() {
         netPriors: _netPriors ? Array.from(_netPriors) : null,
         netBlend:  _netPriors ? policyNet.blendWeight : 0
       });
+
+      /* Watchdog: falls der Worker durch eine echte Endlosschleife hängt
+         (kein try/catch der Welt hilft dagegen), erzwinge nach großzügiger
+         Zeit den Fallback. aiTimeBudget ist die geplante Denkzeit — das
+         Dreifache plus Puffer lässt genug Luft für langsame Geräte, ohne
+         bei einem echten Hänger ewig zu warten. */
+      const watchdogMs = PARAMS.aiTimeBudget * 3 + 3000;
+      setTimeout(() => {
+        if (reqId !== state.aiRequestId) return;   /* längst erledigt/abgebrochen */
+        if (!state.aiThinking) return;             /* Antwort kam bereits an */
+        console.warn('[Worker] Watchdog: keine Antwort nach', watchdogMs, 'ms — erzwinge Fallback');
+        state.workerDead = true;
+        cleanupWorker();
+        fallbackToMainThread(reqId, _netInp, _netPriors, _netHidden);
+      }, watchdogMs);
     } catch(e) {
       /* Versuch 3: Hauptthread */
       console.warn('[triggerAIMove] Worker nicht verfügbar, synchron:', e);
