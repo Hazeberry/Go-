@@ -1,0 +1,2445 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Go – 囲碁</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@300;400;600&family=Noto+Sans+Mono:wght@300;400&display=swap');
+    :root {
+      --wood: #c8a05a; --wood-dark: #9e7438; --wood-light: #e8c882;
+      --ui-bg: #1a130a; --ui-border: #4a3520; --ui-text: #c8a05a;
+      --ui-dim: #7a6040; --red: #c0392b; --green: #27ae60;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--ui-bg); color: var(--ui-text);
+      font-family: 'Noto Serif JP', 'Segoe UI Symbol', serif;
+      min-height: 100vh; display: flex; flex-direction: column; align-items: center;
+      padding: 24px 16px 40px;
+      background-image:
+        radial-gradient(ellipse at 20% 10%, rgba(200,160,90,0.08) 0%, transparent 60%),
+        radial-gradient(ellipse at 80% 90%, rgba(200,160,90,0.06) 0%, transparent 60%);
+    }
+    h1 { font-size: clamp(1.4rem,4vw,2.2rem); font-weight:300; letter-spacing:.35em; color:var(--wood-light); margin-bottom:6px; }
+    .subtitle { font-family:'Noto Sans Mono',monospace; font-size:.7rem; letter-spacing:.2em; color:var(--ui-dim); margin-bottom:20px; }
+    .game-wrap { display:flex; gap:24px; align-items:flex-start; flex-wrap:wrap; justify-content:center; }
+    #board-wrap { position:relative; border-radius:4px; box-shadow: 0 0 0 3px var(--wood-dark), 0 0 0 6px var(--wood), 0 0 0 9px var(--wood-dark), 0 12px 40px rgba(0,0,0,.7); }
+    #board { display:block; cursor:crosshair; border-radius:2px; touch-action:manipulation; }
+    .sidebar { width:220px; display:flex; flex-direction:column; gap:14px; }
+    .panel { border:1px solid var(--ui-border); border-radius:4px; padding:14px 16px; background:rgba(255,255,255,.02); }
+    .panel-title { font-size:.6rem; letter-spacing:.25em; color:var(--ui-dim); text-transform:uppercase; margin-bottom:10px; }
+    .turn-indicator { display:flex; align-items:center; gap:10px; }
+    #turn-stone { width:28px; height:28px; border-radius:50%; flex-shrink:0; transition:background .25s,box-shadow .25s; }
+    #turn-stone.black { background:radial-gradient(circle at 35% 30%,#555,#111); box-shadow:2px 3px 6px rgba(0,0,0,.7),inset 0 1px 2px rgba(255,255,255,.15); }
+    #turn-stone.white { background:radial-gradient(circle at 35% 30%,#fff,#ccc); box-shadow:2px 3px 6px rgba(0,0,0,.5),inset 0 1px 2px rgba(255,255,255,.6); }
+    #turn-label { font-size:.85rem; font-weight:600; color:var(--wood-light); }
+    .score-row { display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; }
+    .score-label { font-size:.72rem; color:var(--ui-dim); }
+    .score-val { font-family:'Noto Sans Mono',monospace; font-size:1.1rem; color:var(--wood-light); }
+    #captures-b { color:#d6d2c8; } #captures-w { color:#a0a0a0; }
+    .territory-row { margin-top:8px; padding-top:8px; border-top:1px dashed var(--ui-border); }
+    .territory-row .score-val { font-size:.9rem; }
+    #final-score { color:var(--green); font-weight:600; }
+    #message { font-size:.72rem; min-height:2.4em; color:var(--red); line-height:1.6; font-family:'Noto Sans Mono',monospace; }
+    .btn { width:100%; padding:9px 12px; font-family:'Noto Serif JP',serif; font-size:.78rem; letter-spacing:.1em; background:transparent; color:var(--ui-text); border:1px solid var(--ui-border); border-radius:3px; cursor:pointer; transition:all .15s; }
+    .btn:hover { background:rgba(200,160,90,.1); border-color:var(--wood); color:var(--wood-light); }
+    .btn:active { background:rgba(200,160,90,.18); }
+    .btn:disabled { opacity:.4; cursor:not-allowed; }
+    .btn-pass { margin-bottom:6px; }
+    .btn.active-mode { border-color:var(--green); color:var(--green); background:rgba(39,174,96,.08); }
+    #log { font-family:'Noto Sans Mono',monospace; font-size:.62rem; color:var(--ui-dim); max-height:140px; overflow-y:auto; line-height:1.7; }
+    #log::-webkit-scrollbar { width:4px; } #log::-webkit-scrollbar-thumb { background:var(--ui-border); border-radius:2px; }
+    .choice-row { display:flex; gap:6px; margin-top:4px; }
+    .diff-btn,.color-btn { flex:1; padding:5px 2px; font-size:.6rem; font-family:'Noto Sans Mono',monospace; background:transparent; color:var(--ui-dim); border:1px solid var(--ui-border); border-radius:2px; cursor:pointer; transition:all .15s; }
+    .diff-btn:hover,.color-btn:hover { border-color:var(--wood); color:var(--wood-light); }
+    .diff-btn.active,.color-btn.active { border-color:var(--green); color:var(--green); background:rgba(39,174,96,.08); }
+    .ai-status { font-size:.6rem; color:var(--ui-dim); margin-top:6px; font-family:'Noto Sans Mono',monospace; }
+    .ai-thinking { color:var(--wood-light); animation:pulse 1s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.5} }
+  </style>
+</head>
+<body>
+<h1>囲碁 &nbsp;·&nbsp; Go</h1>
+<p class="subtitle">19×19 · MoE · Area-Scoring · Pass-Check · CSP-safe</p>
+<div class="game-wrap">
+  <div id="board-wrap"><canvas id="board"></canvas></div>
+  <div class="sidebar">
+    <div class="panel">
+      <div class="panel-title">Am Zug</div>
+      <div class="turn-indicator"><div id="turn-stone" class="black"></div><span id="turn-label">Schwarz</span></div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Gefangene</div>
+      <div class="score-row"><span class="score-label">Schwarz schlägt</span><span class="score-val" id="captures-b">0</span></div>
+      <div class="score-row" style="margin-bottom:0"><span class="score-label">Weiß schlägt</span><span class="score-val" id="captures-w">0</span></div>
+      <div class="score-row territory-row" id="territory-panel" style="display:none"><span class="score-label">Area (Komi 7.5)</span><span class="score-val" id="final-score">–</span></div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">KI-Modus</div>
+      <button class="btn" id="btn-ai-toggle">KI aktivieren</button>
+      <div style="font-size:.6rem;color:var(--ui-dim);margin-top:8px;letter-spacing:.1em;">SPIELT FÜR</div>
+      <div class="choice-row"><button class="color-btn" data-color="1">Schwarz</button><button class="color-btn active" data-color="2">Weiß</button></div>
+      <div style="font-size:.6rem;color:var(--ui-dim);margin-top:8px;letter-spacing:.1em;">STÄRKE</div>
+      <div class="choice-row"><button class="diff-btn active" data-diff="easy">Leicht</button><button class="diff-btn" data-diff="medium">Mittel</button><button class="diff-btn" data-diff="hard">Schwer</button></div>
+      <div class="ai-status" id="ai-status" style="position:relative">KI ist deaktiviert</div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Status</div>
+      <div id="message">–</div>
+    </div>
+    <div class="panel">
+      <button class="btn btn-pass" id="btn-pass">Passen</button>
+      <button class="btn" id="btn-undo" disabled>Rückgängig</button>
+      <button class="btn" id="btn-reset" style="margin-top:6px">Neues Spiel</button>
+    </div>
+    <div class="panel">
+      <div class="panel-title" style="display:flex;justify-content:space-between;align-items:center;">
+        <span>Zugprotokoll</span>
+        <button id="btn-copy-log" style="font-size:.55rem;padding:2px 8px;font-family:'Noto Sans Mono',monospace;background:transparent;color:var(--ui-dim);border:1px solid var(--ui-border);border-radius:2px;cursor:pointer;letter-spacing:.05em;" title="Protokoll kopieren">📋</button>
+      </div>
+      <div id="log"></div>
+    </div>
+  </div>
+</div>
+
+<script id="shared-go-logic">
+const SIZE = 19;
+const BOARD_SIZE = SIZE * SIZE;
+const COL_LETTERS = 'ABCDEFGHJKLMNOPQRST';
+const HOSHI_XY = [[3,3],[9,3],[15,3],[3,9],[9,9],[3,15],[9,15],[15,15]];
+const HOSHI_IDX = new Set(HOSHI_XY.map(([x,y]) => y * SIZE + x));
+
+function idx(x, y) { return y * SIZE + x; }
+function xOf(i) { return i % SIZE; }
+function yOf(i) { return (i / SIZE) | 0; }
+
+const NEIGHBORS = (() => {
+  const t = new Array(BOARD_SIZE);
+  for (let i = 0; i < BOARD_SIZE; i++) {
+    const x = xOf(i), y = yOf(i), n = [];
+    if (x > 0)      n.push(i - 1);
+    if (x < SIZE-1) n.push(i + 1);
+    if (y > 0)      n.push(i - SIZE);
+    if (y < SIZE-1) n.push(i + SIZE);
+    t[i] = n;
+  }
+  return t;
+})();
+
+function createBoard() { return new Uint8Array(BOARD_SIZE); }
+function cloneBoard(b) { return new Uint8Array(b); }
+
+/* FIX: XOR arbeitet in JS nur auf 32 Bit — die alte Float64-Tabelle wurde
+   dadurch stillschweigend auf 32-Bit-Hashes gestutzt. Jetzt zwei getrennte
+   32-Bit-Ebenen, kombiniert zu einem exakten 53-Bit-Integer → praktisch
+   keine Superko-Hash-Kollisionen mehr. */
+const ZOBRIST_LO = new Uint32Array(BOARD_SIZE * 3);
+const ZOBRIST_HI = new Uint32Array(BOARD_SIZE * 3);
+(() => {
+  let s = 123456789;
+  const r = () => { s ^= s << 13; s ^= s >> 17; s ^= s << 5; return s >>> 0; };
+  for (let i = 0; i < ZOBRIST_LO.length; i++) { ZOBRIST_LO[i] = r(); ZOBRIST_HI[i] = r(); }
+})();
+
+function computeZobrist(board) {
+  let lo = 0, hi = 0;
+  for (let i = 0; i < BOARD_SIZE; i++)
+    if (board[i]) {
+      const k = i * 3 + (board[i] - 1);
+      lo ^= ZOBRIST_LO[k]; hi ^= ZOBRIST_HI[k];
+    }
+  return hi * 0x200000 + (lo >>> 11);   /* 32 + 21 = 53 Bit, exakt in Number */
+}
+
+const _ffVisited = new Int32Array(BOARD_SIZE);
+let   _ffEpoch   = 0;
+
+function floodFill(board, startIdx) {
+  const color = board[startIdx];
+  const group = [], liberties = [];
+  const epoch = ++_ffEpoch;
+  const queue = [startIdx];
+  let head = 0;
+  _ffVisited[startIdx] = epoch;
+  while (head < queue.length) {
+    const i = queue[head++];
+    const cell = board[i];
+    if (cell === 0) { liberties.push(i); continue; }
+    if (cell !== color) continue;
+    group.push(i);
+    for (const n of NEIGHBORS[i])
+      if (_ffVisited[n] !== epoch) { _ffVisited[n] = epoch; queue.push(n); }
+  }
+  return { group, liberties };
+}
+
+const _rdgChecked = new Int32Array(BOARD_SIZE);
+
+function removeDeadGroups(board, color, nearIdx) {
+  const epoch = ++_ffEpoch;
+  let captured = 0;
+  const cells = (nearIdx !== undefined)
+    ? NEIGHBORS[nearIdx].filter(n => board[n] === color)
+    : (() => { const r = []; for (let i = 0; i < BOARD_SIZE; i++) if (board[i] === color) r.push(i); return r; })();
+  for (const i of cells) {
+    if (board[i] !== color || _rdgChecked[i] === epoch) continue;
+    const {group, liberties} = floodFill(board, i);
+    for (const g of group) _rdgChecked[g] = epoch;
+    if (liberties.length === 0)
+      for (const g of group) { board[g] = 0; captured++; }
+  }
+  return captured;
+}
+
+function findEyes(board, group, color) {
+  const eyes = [], candidates = new Map();
+  for (const g of group)
+    for (const n of NEIGHBORS[g])
+      if (board[n] === 0 && !candidates.has(n)) candidates.set(n, n);
+  for (const candIdx of candidates.keys()) {
+    let isEye = true, own = 0;
+    for (const n of NEIGHBORS[candIdx]) {
+      const cell = board[n];
+      if (cell === color || (cell === 0 && candidates.has(n))) own++;
+      else { isEye = false; break; }
+    }
+    const x = xOf(candIdx), y = yOf(candIdx);
+    const edge = x===0||x===SIZE-1||y===0||y===SIZE-1;
+    const corner = (x===0||x===SIZE-1)&&(y===0||y===SIZE-1);
+    if (isEye && own >= (corner?2:edge?3:4)) eyes.push(candIdx);
+  }
+  return eyes;
+}
+
+function coordToLabel(x, y) { return `${COL_LETTERS[x]}${SIZE-y}`; }
+</script>
+<script id="worker-ai">
+'use strict';
+
+/* ═══════════════════════════════════════════════════════════════
+   PARAMS – alle Feinabstimmungs-Konstanten an einem Ort.
+   Werden vom Dashboard live bearbeitet.
+   ═══════════════════════════════════════════════════════════════ */
+globalThis.PARAMS = {
+  /* Phasen-Grenzen */
+  openingMoves:      20,
+  endgameMoves:      80,
+  endgameEmpty:      50,
+  /* Eröffnung */
+  openEdge3:         40,
+  openEdge5:         25,
+  openCenter:         8,
+  openHoshiBonus:    30,
+  openCornerBonus:   15,
+  openCapBonus:     400,
+  openNeighborBonus: 10,
+  /* Mittelspiel */
+  midCapBonus:      800,
+  midLibBonus:       30,
+  midAtariPenalty:  400,
+  mid2LibPenalty:    60,
+  midRescueAtari:   350,
+  midRescue2Lib:     60,
+  midOppAtari:      350,
+  midOpp2Lib:       120,
+  midOpp3Lib:        30,
+  midEmptyNeighbor:   8,
+  midOwnNeighborBonus:15,
+  midOwnGroup2:      40,
+  midOwnGroup3:      60,
+  midExtBonus:        6,
+  midSafeBonus:      25,
+  midOppAtariNear:  150,
+  /* Endspiel */
+  endAreaGain:       30,
+  endCapBonus:       18,
+  endAtariPenalty:  400,
+  endOppAtari:       80,
+  /* Tsumego */
+  tsumegoCapBonus:  1200,
+  tsumegoAtariSet:   500,
+  tsumego2Lib:       150,
+  tsumegoRescue3:    700,
+  tsumegoRescue2:    400,
+  tsumegoRescue1:     80,
+  tsumegoRescue2to3: 150,
+  tsumegoLibBonus:   40,
+  tsumego2LibPenalty: 60,
+  tsumegoEyeBonus:  100,
+  tsumegoEyeMax:    300,
+  tsumegoNakade:      0.5,
+  tsumegoWeaken:    300,
+  tsumegoSafetyMul:   0.2,
+  /* Krisen-Karte */
+  crisisAtari:      100,
+  crisisLarge2Lib:   80,
+  crisisDragon3Lib:  50,
+  crisisLargeSize:    4,
+  crisisDragonSize:   8,
+  /* Pass & Suche */
+  passGainThreshold: 60,
+  passMinMc40:      -50,
+  passMinMc80:       20,
+  passMinMc120:       8,
+  passMinMc150:      10,
+  aiTimeBudget:    1800,
+  rolloutWeight:    0.65,
+  scoreWeight:      0.35,
+  rolloutSample:     32,
+  /* Compute-Budget (Hard-KI) — FIX Bug 3: war komplett vergessen */
+  candOpen: 8, rollOpen: 3, depthOpen: 10,
+  candMid: 5, rollMid: 3, depthMid: 12,
+  candMidMax: 12, rollMidMin: 2, depthMidMax: 30,
+  candEnd: 8, rollEndMin: 4, rollEnd: 6, depthEnd: 20, depthEndMax: 50,
+  crisisCand: 4, crisisRoll: 5, crisisDepth: 20,
+  /* MoE Soft-Gating: Experten überblenden statt hart umschalten */
+  phaseBlendWidth:    8,
+  /* MCTS-PUCT (Schwer-KI) — alternativer Such-Ansatz, A/B via useMCTS */
+  useMCTS:            1,
+  puctC:            1.4,
+  mctsRootChildren:  16,
+  mctsChildren:       8,
+  mctsRolloutDepth:  24,
+  mctsValueScale:   400,
+  mctsMaxDepth:      60,
+  /* RAVE/AMAF + Tree-Reuse — Statistik-Hebel ohne Training */
+  raveEnabled:         1,    // 0 = aus, reines PUCT wie vorher
+  raveK:             300,    // AMAF-Einfluss; höher = länger stark gewichtet
+  mctsTreeReuse:       1,    // 0 = aus, immer frischer Baum
+  /* PolicyNet — FIX Bug 5: wurde referenziert aber nie definiert */
+  netMaxBlend:      0.30,
+  netWarmup:         10,
+  netLR:           0.001,
+  netScoreScale:   5000,
+  /* MoE: weiches Phasen-Blending (Fenster in Zügen, 0 = hartes Schalten) */
+  phaseBlend:         8,
+  /* MCTS-PUCT (Schwer-KI). mctsEnabled 0 = alte Kandidaten×Rollout-Suche */
+  mctsEnabled:        1,
+  mctsC:            1.4,
+  mctsFPU:         0.45,
+  mctsMaxChildren:   20,
+  mctsRolloutDepth:  24,
+  mctsValueScale:   350,
+  mctsPriorTemp:    150,
+  mctsMaxPlayouts: 4000,
+};
+globalThis.PARAMS_DEFAULT = Object.freeze({...PARAMS});
+
+/* ── Globale Scratchpads (einmalig alloziert, nie GC'd) ──── */
+const _legalScratch   = new Uint8Array(BOARD_SIZE);
+const _evalScratch    = new Uint8Array(BOARD_SIZE);
+const _quickScratch   = new Uint8Array(BOARD_SIZE);
+const _rolloutScratch = new Uint8Array(BOARD_SIZE);
+const _simScratch     = new Uint8Array(BOARD_SIZE);
+const _tsumegoScratch = new Uint8Array(BOARD_SIZE);
+
+function removeDeadGroupsUndoable(board, color, nearIdx) {
+  const epoch = ++_ffEpoch;
+  let captured = 0;
+  const undo = [];
+  const cells = (nearIdx !== undefined)
+    ? NEIGHBORS[nearIdx].filter(n => board[n] === color)
+    : (() => { const r = []; for (let i = 0; i < BOARD_SIZE; i++) if (board[i] === color) r.push(i); return r; })();
+  for (const i of cells) {
+    if (board[i] !== color || _rdgChecked[i] === epoch) continue;
+    const {group, liberties} = floodFill(board, i);
+    for (const g of group) _rdgChecked[g] = epoch;
+    if (liberties.length === 0)
+      for (const g of group) { undo.push({idx:g, oldColor:board[g]}); board[g] = 0; captured++; }
+  }
+  return {captured, undo};
+}
+
+function applyUndo(board, undo) {
+  for (let i = undo.length - 1; i >= 0; i--) board[undo[i].idx] = undo[i].oldColor;
+}
+
+function getLegalMoves(board, color, historyHashes) {
+  const opp = color === 1 ? 2 : 1;
+  const moves = [];
+  /* PERF: Rollouts übergeben ein leeres Hash-Set — dann den teuren
+     Zobrist-Scan (361 Zellen pro Kandidat!) komplett überspringen.
+     Verhalten identisch, aber die Hard-KI spart Millionen Operationen. */
+  const checkKo = historyHashes && historyHashes.size > 0;
+  _legalScratch.set(board);
+  for (let i = 0; i < BOARD_SIZE; i++) {
+    if (board[i] !== 0) continue;
+    _legalScratch[i] = color;
+    const {captured, undo} = removeDeadGroupsUndoable(_legalScratch, opp, i);
+    let legal = true;
+    if (captured === 0 && floodFill(_legalScratch, i).liberties.length === 0) legal = false;
+    if (legal && (!checkKo || !historyHashes.has(computeZobrist(_legalScratch))))
+      moves.push({x: xOf(i), y: yOf(i), idx: i});
+    applyUndo(_legalScratch, undo);
+    _legalScratch[i] = 0;
+  }
+  return moves;
+}
+
+function evalOpening(board, i, color, mc) {
+  let s = 0;
+  const x = xOf(i), y = yOf(i);
+  const dte = Math.min(x, y, SIZE-1-x, SIZE-1-y);
+  if (dte <= 4) s += PARAMS.openEdge3;
+  else if (x <= 4 || x >= 14 || y <= 4 || y >= 14) s += PARAMS.openEdge5;
+  else s += PARAMS.openCenter;
+  if (HOSHI_IDX.has(i) && mc < 15) s += PARAMS.openHoshiBonus;
+  const cornerDist = Math.min(x, SIZE-1-x);
+  const sideDist = Math.min(y, SIZE-1-y);
+  if (cornerDist >= 2 && cornerDist <= 4 && sideDist >= 2 && sideDist <= 4) s += PARAMS.openCornerBonus;
+  const opp = color === 1 ? 2 : 1;
+  _evalScratch.set(board);
+  _evalScratch[i] = color;
+  const cap = removeDeadGroups(_evalScratch, opp, i);
+  if (cap === 0) {
+    const {liberties} = floodFill(_evalScratch, i);
+    if (liberties.length === 0) s -= 10000;
+    else if (liberties.length === 1) s -= 200;
+  } else s += cap * PARAMS.openCapBonus;
+  let ownNbr = 0;
+  for (const n of NEIGHBORS[i]) if (board[n] === color) ownNbr++;
+  s += ownNbr * PARAMS.openNeighborBonus;
+  return s + Math.random() * 3;
+}
+
+function evalMidgame(board, i, color, mc) {
+  let s = 0;
+  const opp = color === 1 ? 2 : 1;
+  _evalScratch.set(board);
+  _evalScratch[i] = color;
+  const cap = removeDeadGroups(_evalScratch, opp, i);
+  s += cap * PARAMS.midCapBonus;
+  const own = floodFill(_evalScratch, i);
+  const lib = own.liberties.length;
+  s += lib * PARAMS.midLibBonus;
+  if (!lib) s -= 10000;
+  if (lib === 1 && !cap) s -= PARAMS.midAtariPenalty;
+  if (lib === 2 && !cap) s -= PARAMS.mid2LibPenalty;
+  let on = 0;
+  for (const n of NEIGHBORS[i]) {
+    const c = board[n];
+    if (c === color) {
+      on++;
+      const info = floodFill(board, n);
+      if (info.liberties.length === 1) s += PARAMS.midRescueAtari;
+      if (info.liberties.length === 2) s += PARAMS.midRescue2Lib;
+    } else if (c === opp) {
+      const l = floodFill(board, n).liberties.length;
+      if (l === 1) s += PARAMS.midOppAtari;
+      if (l === 2) s += PARAMS.midOpp2Lib;
+      if (l === 3) s += PARAMS.midOpp3Lib;
+    } else s += PARAMS.midEmptyNeighbor;
+  }
+  s += on * PARAMS.midOwnNeighborBonus; if (on >= 2) s += PARAMS.midOwnGroup2; if (on >= 3) s += PARAMS.midOwnGroup3;
+  let ext = 0;
+  for (const g of own.group) for (const n of NEIGHBORS[g]) if (_evalScratch[n] === 0) ext++;
+  s += Math.min(ext, 12) * PARAMS.midExtBonus;
+  for (const n of NEIGHBORS[i]) {
+    if (board[n] !== 0) continue;
+    let sec = true;
+    for (const nn of NEIGHBORS[n]) if (_evalScratch[nn] && _evalScratch[nn] !== color) { sec = false; break; }
+    if (sec) s += PARAMS.midSafeBonus;
+  }
+  for (const n of NEIGHBORS[i])
+    if (_evalScratch[n] === opp && floodFill(_evalScratch, n).liberties.length === 1) s += PARAMS.midOppAtariNear;
+  return s + Math.random() * 4;
+}
+
+const _areaVisited = new Int32Array(BOARD_SIZE);
+let   _areaEpoch   = 0;
+
+function estimateArea(board, color) {
+  const opp = color === 1 ? 2 : 1;
+  let area = 0;
+  const epoch = ++_areaEpoch;
+  for (let i = 0; i < BOARD_SIZE; i++) {
+    const c = board[i];
+    if (c === color) { area++; continue; }
+    if (c === opp)   continue;
+    if (_areaVisited[i] === epoch) continue;
+    let head = 0; const queue = [i]; _areaVisited[i] = epoch;
+    const region = [i];
+    let touchesOwn = false, touchesOpp = false;
+    while (head < queue.length) {
+      const cur = queue[head++];
+      for (const n of NEIGHBORS[cur]) {
+        const cc = board[n];
+        if (cc === 0) {
+          if (_areaVisited[n] !== epoch) { _areaVisited[n] = epoch; queue.push(n); region.push(n); }
+        } else if (cc === color) touchesOwn = true;
+        else touchesOpp = true;
+      }
+    }
+    if (touchesOwn && !touchesOpp) area += region.length;
+  }
+  return area;
+}
+
+let _areaCacheValid = false;
+let _areaCacheOwn = 0, _areaCacheOpp = 0, _areaCacheColor = 0;
+
+function primeAreaCache(board, color) {
+  const opp = color === 1 ? 2 : 1;
+  _areaCacheOwn = estimateArea(board, color);
+  _areaCacheOpp = estimateArea(board, opp);
+  _areaCacheColor = color;
+  _areaCacheValid = true;
+}
+
+function evalEndgame(board, i, color, mc) {
+  const opp = color === 1 ? 2 : 1;
+  let areaBefore, oppBefore;
+  if (_areaCacheValid && _areaCacheColor === color) {
+    areaBefore = _areaCacheOwn; oppBefore = _areaCacheOpp;
+  } else {
+    areaBefore = estimateArea(board, color);
+    oppBefore  = estimateArea(board, opp);
+  }
+  _evalScratch.set(board);
+  _evalScratch[i] = color;
+  const cap = removeDeadGroups(_evalScratch, opp, i);
+  const own = floodFill(_evalScratch, i);
+  const lib = own.liberties.length;
+  if (lib === 0 && cap === 0) return -10000 + Math.random();
+  const areaAfter = estimateArea(_evalScratch, color);
+  const oppAfter  = estimateArea(_evalScratch, opp);
+  const myGain  = areaAfter - areaBefore;
+  const oppLoss = oppBefore  - oppAfter;
+  let s = (myGain + oppLoss) * PARAMS.endAreaGain;
+  s += cap * PARAMS.endCapBonus;
+  if (lib === 1 && cap === 0) s -= PARAMS.endAtariPenalty;
+  for (const n of NEIGHBORS[i]) {
+    if (board[n] === opp && floodFill(board, n).liberties.length === 1) s += PARAMS.endOppAtari;
+  }
+  return s + Math.random() * 0.5;
+}
+
+const _crisisOwn = new Uint8Array(BOARD_SIZE);
+const _crisisOpp = new Uint8Array(BOARD_SIZE);
+
+function buildCrisisMap(board, color) {
+  _crisisOwn.fill(0);
+  _crisisOpp.fill(0);
+  const opp = color === 1 ? 2 : 1;
+  const seen = new Uint8Array(BOARD_SIZE);
+  for (let i = 0; i < BOARD_SIZE; i++) {
+    const c = board[i];
+    if (!c || seen[i]) continue;
+    const {group, liberties} = floodFill(board, i);
+    for (const g of group) seen[g] = 1;
+    const libs = liberties.length;
+    const size = group.length;
+    let w = 0;
+    if      (libs === 1)                                           w = PARAMS.crisisAtari;
+    else if (libs === 2 && size >= PARAMS.crisisLargeSize)  w = PARAMS.crisisLarge2Lib;
+    else if (libs === 3 && size >= PARAMS.crisisDragonSize) w = PARAMS.crisisDragon3Lib;
+    if (w > 0) {
+      const target = c === color ? _crisisOwn : _crisisOpp;
+      for (const lib of liberties) if (target[lib] < w) target[lib] = w;
+    }
+  }
+}
+
+function getCrisisWeight(i) {
+  return Math.max(_crisisOwn[i], _crisisOpp[i]) / 100;
+}
+
+function isTsumegoSituation(i) {
+  return _crisisOwn[i] > 0 || _crisisOpp[i] > 0;
+}
+
+function evalNakade(boardBefore, boardAfter, i, opp) {
+  let bonus = 0;
+  const seen = new Set();
+  for (const n of NEIGHBORS[i]) {
+    if (boardBefore[n] !== opp || seen.has(n)) continue;
+    const before = floodFill(boardBefore, n);
+    for (const g of before.group) seen.add(g);
+    if (!before.liberties.includes(i)) continue;
+    const libsBefore = before.liberties.length;
+    if (boardAfter[n] !== opp) { bonus += 1200; continue; }
+    const libsAfter = floodFill(boardAfter, n).liberties.length;
+    if      (libsAfter === 0)                          bonus += 1200;
+    else if (libsAfter === 1)                          bonus += 700;
+    else if (libsAfter === 2 && libsBefore <= 3)       bonus += 250;
+  }
+  return bonus;
+}
+
+function evalTsumego(board, i, color, mc) {
+  let s = 0;
+  const opp = color === 1 ? 2 : 1;
+  _tsumegoScratch.set(board);
+  _tsumegoScratch[i] = color;
+  const cap = removeDeadGroups(_tsumegoScratch, opp, i);
+  const own = floodFill(_tsumegoScratch, i);
+  const lib = own.liberties.length;
+  if (lib === 0 && cap === 0) return -10000 + Math.random();
+  const safetyMul = (lib === 1 && cap === 0) ? PARAMS.tsumegoSafetyMul : 1.0;
+  s += cap * PARAMS.tsumegoCapBonus;
+  for (const n of NEIGHBORS[i]) {
+    if (_tsumegoScratch[n] !== opp) continue;
+    const l = floodFill(_tsumegoScratch, n).liberties.length;
+    if (l === 1) s += PARAMS.tsumegoAtariSet;
+    else if (l === 2) s += PARAMS.tsumego2Lib;
+  }
+  for (const n of NEIGHBORS[i]) {
+    if (board[n] !== color) continue;
+    const before = floodFill(board, n).liberties.length;
+    if (before <= 2) {
+      const after = floodFill(_tsumegoScratch, n).liberties.length;
+      if (before === 1) {
+        if      (after >= 3) s += PARAMS.tsumegoRescue3;
+        else if (after === 2) s += PARAMS.tsumegoRescue2;
+        else if (after === 1) s += PARAMS.tsumegoRescue1;
+      } else if (before === 2 && after >= 3) {
+        s += PARAMS.tsumegoRescue2to3;
+      }
+    }
+  }
+  s += lib * PARAMS.tsumegoLibBonus;
+  if (lib === 2 && cap === 0) s -= PARAMS.tsumego2LibPenalty;
+  const seenCands = new Uint8Array(BOARD_SIZE);
+  let eyeBonus = 0;
+  for (const g of own.group) {
+    for (const n of NEIGHBORS[g]) {
+      if (_tsumegoScratch[n] !== 0 || seenCands[n]) continue;
+      seenCands[n] = 1;
+      let potEye = true;
+      let ownAdj = 0;
+      for (const nn of NEIGHBORS[n]) {
+        const c = _tsumegoScratch[nn];
+        if (c === opp) { potEye = false; break; }
+        if (c === color) ownAdj++;
+      }
+      const nx = xOf(n), ny = yOf(n);
+      const edge   = nx===0||nx===SIZE-1||ny===0||ny===SIZE-1;
+      const corner = (nx===0||nx===SIZE-1)&&(ny===0||ny===SIZE-1);
+      const minOwn = corner ? 1 : edge ? 2 : 3;
+      if (potEye && ownAdj >= minOwn) eyeBonus += PARAMS.tsumegoEyeBonus;
+    }
+  }
+  s += Math.min(eyeBonus, PARAMS.tsumegoEyeMax);
+  s += evalNakade(board, _tsumegoScratch, i, opp) * PARAMS.tsumegoNakade;
+  for (const n of NEIGHBORS[i]) {
+    if (board[n] !== color) continue;
+    const before = floodFill(board, n).liberties.length;
+    const after  = floodFill(_tsumegoScratch, n).liberties.length;
+    if (after === 1 && before > 1) s -= PARAMS.tsumegoWeaken;
+  }
+  return s * safetyMul + Math.random() * 3;
+}
+
+/* ═══ MoE Soft-Gating ════════════════════════════════════════
+   Bisher: harte if/else-Umschaltung → Zug 19→20 bewertet plötzlich
+   komplett anders (Diskontinuität, sichtbare Stilbrüche).
+   Jetzt: smoothstep-Rampen über ±phaseBlendWidth Züge; in der
+   Übergangszone laufen zwei Experten und werden gewichtet gemischt.
+   phaseBlendWidth = 0 stellt exakt das alte Verhalten wieder her. */
+function smoothstep01(t) { t = t < 0 ? 0 : t > 1 ? 1 : t; return t * t * (3 - 2 * t); }
+
+function phaseWeights(mc, emptyFields) {
+  const W = PARAMS.phaseBlendWidth;
+  if (W <= 0) {
+    if (mc > PARAMS.endgameMoves || emptyFields < PARAMS.endgameEmpty) return {wOpen:0, wMid:0, wEnd:1};
+    if (mc < PARAMS.openingMoves) return {wOpen:1, wMid:0, wEnd:0};
+    return {wOpen:0, wMid:1, wEnd:0};
+  }
+  const eMoves = smoothstep01((mc - PARAMS.endgameMoves) / (2*W) + 0.5);
+  const eEmpty = smoothstep01((PARAMS.endgameEmpty - emptyFields) / (4*W) + 0.5);
+  const wEnd   = Math.max(eMoves, eEmpty);       /* ODER-Logik wie bisher */
+  const wOpen  = smoothstep01((PARAMS.openingMoves - mc) / (2*W) + 0.5) * (1 - wEnd);
+  return {wOpen, wMid: 1 - wEnd - wOpen, wEnd};
+}
+
+function evaluateMove(board, i, color, mc, emptyFields) {
+  const {wOpen, wMid, wEnd} = phaseWeights(mc, emptyFields);
+  const T = 0.02;   /* Experten unter 2% Gewicht nicht rechnen (Perf) */
+  let sPhase = 0, wSum = 0;
+  if (wOpen > T) { sPhase += wOpen * evalOpening(board, i, color, mc); wSum += wOpen; }
+  if (wMid  > T) { sPhase += wMid  * evalMidgame(board, i, color, mc); wSum += wMid; }
+  if (wEnd  > T) { sPhase += wEnd  * evalEndgame(board, i, color, mc); wSum += wEnd; }
+  if (wSum > 0) sPhase /= wSum;
+  const wCrisis = getCrisisWeight(i);
+  if (wCrisis === 0) return sPhase;
+  const sCrisis = evalTsumego(board, i, color, mc);
+  return (1 - wCrisis) * sPhase + wCrisis * sCrisis;
+}
+
+function quickEval(board, i, color) {
+  const opp = color === 1 ? 2 : 1;
+  let score = 0, free = 0, oppN = 0, ownN = 0;
+  for (const n of NEIGHBORS[i]) {
+    const c = board[n];
+    if (c === 0) free++;
+    else if (c === opp) { oppN++; if (floodFill(board, n).liberties.length === 1) score += 200; }
+    else { ownN++; if (floodFill(board, n).liberties.length <= 2) score += 80; }
+  }
+  _quickScratch.set(board);
+  _quickScratch[i] = color;
+  const cap = removeDeadGroups(_quickScratch, opp, i);
+  score += cap * 500;
+  const selfLib = floodFill(_quickScratch, i).liberties.length;
+  if (selfLib === 1 && cap === 0) score -= 300;
+  return score + free*40 + oppN*20 + ownN*15 + Math.random()*5;
+}
+
+function evaluateBoard(board, color, captures) {
+  const opp = color === 1 ? 2 : 1;
+  let s = ((captures[color]||0) - (captures[opp]||0)) * 20;
+  const seen = new Uint8Array(BOARD_SIZE);
+  for (let i = 0; i < BOARD_SIZE; i++) {
+    const c = board[i]; if (!c || seen[i]) continue;
+    const {group, liberties} = floodFill(board, i);
+    for (const g of group) seen[g] = 1;
+    const v = group.length * 5 + liberties.length * 3;
+    s += (c === color) ? v : -v;
+  }
+  return s;
+}
+
+const _emptyHashes = new Set();
+
+/* PERF: Rollouts brauchen keine vollständige Zugliste — eine zufällige
+   Stichprobe legaler Züge reicht für die Playout-Policy und spart pro
+   Ply ~85% der Legalitätsprüfungen. Iteriert geshuffelt weiter, falls
+   die ersten Kandidaten illegal sind → Pass-Erkennung bleibt korrekt.
+   PARAMS.rolloutSample = 0 stellt das alte Verhalten wieder her. */
+function sampleLegalMoves(board, color, S) {
+  const empties = [];
+  for (let i = 0; i < BOARD_SIZE; i++) if (board[i] === 0) empties.push(i);
+  if (!empties.length) return [];
+  const opp = color === 1 ? 2 : 1;
+  const moves = [];
+  const limit = Math.min(S, empties.length);
+  _legalScratch.set(board);
+  for (let j = 0; j < empties.length && moves.length < limit; j++) {
+    const r = j + Math.floor(Math.random() * (empties.length - j));
+    const t = empties[j]; empties[j] = empties[r]; empties[r] = t;
+    const i = empties[j];
+    _legalScratch[i] = color;
+    const {captured, undo} = removeDeadGroupsUndoable(_legalScratch, opp, i);
+    let legal = true;
+    if (captured === 0 && floodFill(_legalScratch, i).liberties.length === 0) legal = false;
+    applyUndo(_legalScratch, undo);
+    _legalScratch[i] = 0;
+    if (legal) moves.push({x: xOf(i), y: yOf(i), idx: i});
+  }
+  return moves;
+}
+
+function rollout(board, startColor, histHashes, captures, depth, rootColor) {
+  _rolloutScratch.set(board);
+  const simCap = {1: captures[1]||0, 2: captures[2]||0};
+  let color = startColor, passes = 0;
+  const S = PARAMS.rolloutSample | 0;
+  for (let d = 0; d < depth; d++) {
+    const opp = color === 1 ? 2 : 1;
+    const legal = (S > 0)
+      ? sampleLegalMoves(_rolloutScratch, color, S)
+      : getLegalMoves(_rolloutScratch, color, _emptyHashes);
+    if (!legal.length) { if (++passes >= 2) break; color = opp; continue; }
+    passes = 0;
+    const scored = legal.map(m => ({m, score: quickEval(_rolloutScratch, m.idx, color)}));
+    scored.sort((a,b) => b.score - a.score);
+    const K = d < 10 ? 3 : 6;
+    const top = scored.slice(0, Math.min(K, scored.length));
+    const ch = top[Math.floor(Math.random() * top.length)];
+    _rolloutScratch[ch.m.idx] = color;
+    simCap[color] += removeDeadGroups(_rolloutScratch, opp, ch.m.idx);
+    color = opp;
+  }
+  return evaluateBoard(_rolloutScratch, rootColor, simCap);
+}
+
+/* ═══ MCTS mit PUCT — alternativer Such-Ansatz (PARAMS.useMCTS) ═══
+   Statt flacher Kandidaten-Liste + unabhängiger Rollouts: ein Baum,
+   der vielversprechende Varianten tiefer verfolgt und schlechte
+   früh aufgibt. Auswahl: Q + puctC · P · √N_parent / (1+n).
+   Priors rang-basiert (skalenfrei, keine Temperatur nötig):
+   Wurzel aus der schweren MoE-Eval (inkl. Net-Blend),
+   innere Knoten aus quickEval. Werte via tanh(evaluateBoard/scale),
+   immer aus Sicht der KI gespeichert → Gegner-Knoten invertieren. */
+const _mctsScratch = new Uint8Array(BOARD_SIZE);
+
+function _mctsKids(list, K) {
+  const n = Math.min(K, list.length);
+  if (!n) return [];
+  const sum = n * (n + 1) / 2;
+  const kids = new Array(n);
+  for (let r = 0; r < n; r++)
+    kids[r] = {idx: list[r].m.idx, x: list[r].m.x, y: list[r].m.y,
+               P: (n - r) / sum, N: 0, W: 0, kids: null};
+  return kids;
+}
+
+/* Modul-Zustand für Tree-Reuse. Lebt im Worker zwischen Zügen (Worker-Pool
+   macht das möglich) und verschwindet automatisch bei resetGame, weil der
+   gepoolte Worker dann terminiert und beim nächsten Hard-Zug neu gebaut wird —
+   kein explizites Invalidieren nötig. */
+let _mctsSavedRoot = null;   // {node, board (Zustand NACH unserem Zug), aiColor}
+
+function _tryReuseSubtree(savedBoard, aiColor, savedNode, currentBoard) {
+  if (!savedNode || !savedNode.kids || !savedNode.kids.length) return null;
+  const opp = aiColor === 1 ? 2 : 1;
+  for (const kid of savedNode.kids) {
+    _mctsScratch.set(savedBoard);
+    _mctsScratch[kid.idx] = opp;
+    removeDeadGroups(_mctsScratch, aiColor, kid.idx);
+    let same = true;
+    for (let i = 0; i < 361; i++) if (_mctsScratch[i] !== currentBoard[i]) { same = false; break; }
+    if (same) return kid;
+  }
+  return null;   /* Board passt zu keinem Kind → Undo/Pass/Fremdzug → frischer Baum */
+}
+
+function mctsPUCT(board, aiColor, captures, rootScored) {
+  const deadline = Date.now() + PARAMS.aiTimeBudget;
+  const scale = PARAMS.mctsValueScale, c = PARAMS.puctC;
+  const rave = PARAMS.raveEnabled >= 1, raveK = PARAMS.raveK;
+
+  let root = null;
+  if (PARAMS.mctsTreeReuse >= 1 && _mctsSavedRoot && _mctsSavedRoot.aiColor === aiColor) {
+    root = _tryReuseSubtree(_mctsSavedRoot.board, aiColor, _mctsSavedRoot.node, board);
+  }
+  if (!root) root = {N: 0, W: 0, kids: _mctsKids(rootScored, PARAMS.mctsRootChildren)};
+  if (!root.kids.length) return null;
+
+  let sims = 0;
+  while (Date.now() < deadline && sims < 20000) {
+    sims++;
+    _mctsScratch.set(board);
+    const cap = {1: captures[1]||0, 2: captures[2]||0};
+    let node = root, color = aiColor, v = null;
+    const path = [];   /* {parentNode, color, kid} je Tiefe — für Standard- und AMAF-Backup */
+    for (let depth = 0; depth < PARAMS.mctsMaxDepth; depth++) {
+      if (node !== root && node.kids === null) {
+        const legal = getLegalMoves(_mctsScratch, color, _emptyHashes);
+        const list = legal.map(m => ({m, score: quickEval(_mctsScratch, m.idx, color)}));
+        list.sort((a,b) => b.score - a.score);
+        node.kids = _mctsKids(list, PARAMS.mctsChildren);
+      }
+      if (!node.kids || !node.kids.length) break;   /* terminal */
+      const sq = Math.sqrt(Math.max(1, node.N));
+      let best = null, bs = -Infinity;
+      for (const k of node.kids) {
+        const q = k.N ? k.W / k.N : 0;
+        let blended = q;
+        if (rave && k.amafN) {
+          const beta = Math.sqrt(raveK / (3 * node.N + raveK));
+          blended = (1 - beta) * q + beta * (k.amafW / k.amafN);
+        }
+        const s = (color === aiColor ? blended : -blended) + c * k.P * sq / (1 + k.N);
+        if (s > bs) { bs = s; best = k; }
+      }
+      const opp = color === 1 ? 2 : 1;
+      _mctsScratch[best.idx] = color;
+      cap[color] += removeDeadGroups(_mctsScratch, opp, best.idx);
+      path.push({parentNode: node, color, kid: best});
+      const firstVisit = best.N === 0;
+      color = opp; node = best;
+      if (firstVisit) {   /* Blatt: kurzer Rollout als Wert-Schätzung */
+        v = Math.tanh(rollout(_mctsScratch, color, null, cap, PARAMS.mctsRolloutDepth, aiColor) / scale);
+        break;
+      }
+    }
+    if (v === null) v = Math.tanh(evaluateBoard(_mctsScratch, aiColor, cap) / scale);
+    root.N++;
+    for (const step of path) { step.kid.N++; step.kid.W += v; }
+
+    /* AMAF/RAVE-Backup: für jeden Entscheidungspunkt entlang des Pfads
+       bekommen ALLE Kinder (nicht nur das gewählte) einen Bonus, wenn ihr
+       Zugindex später im selben Pfad von derselben Farbe gespielt wurde. */
+    if (rave && path.length) {
+      const movesByColor = {1: null, 2: null};
+      for (const step of path) {
+        if (!movesByColor[step.color]) movesByColor[step.color] = new Set();
+        movesByColor[step.color].add(step.kid.idx);
+      }
+      for (const step of path) {
+        const kids = step.parentNode.kids;
+        if (!kids) continue;
+        const mv = movesByColor[step.color];
+        for (const kid of kids) {
+          if (mv.has(kid.idx)) {
+            if (kid.amafN === undefined) { kid.amafN = 0; kid.amafW = 0; }
+            kid.amafN++; kid.amafW += v;
+          }
+        }
+      }
+    }
+  }
+  let bm = root.kids[0], bn = -1;
+  for (const k of root.kids) if (k.N > bn) { bn = k.N; bm = k; }
+
+  /* Teilbaum unter unserem gewählten Zug für den nächsten Aufruf sichern */
+  if (PARAMS.mctsTreeReuse >= 1) {
+    const opp = aiColor === 1 ? 2 : 1;
+    const postBoard = new Uint8Array(board);
+    postBoard[bm.idx] = aiColor;
+    removeDeadGroups(postBoard, opp, bm.idx);
+    _mctsSavedRoot = {node: bm, board: postBoard, aiColor};
+  }
+
+  return {m: {x: bm.x, y: bm.y, idx: bm.idx}, sims,
+          share: root.N ? Math.round(bm.N / root.N * 100) : 0,
+          q: bm.N ? bm.W / bm.N : 0};
+}
+
+function getAIMove(board, aiColor, histHashes, captures, mc, diff, reqId) {
+  const hs = new Set(histHashes);
+  const legal = getLegalMoves(board, aiColor, hs);
+  if (!legal.length) return {type:'pass', requestId:reqId};
+  const empty = legal.length;
+  buildCrisisMap(board, aiColor);
+  primeAreaCache(board, aiColor);
+  const scored = legal.map(m => ({m, score: evaluateMove(board, m.idx, aiColor, mc, empty)}));
+  scored.sort((a,b) => b.score - a.score);
+  /* PolicyNet: Priors berechnen + Score blenden (nur Hard-KI).
+     FIX: Im Worker ist policyNet nur ein Stub OHNE boardToInput/forward —
+     der alte Code crashte dort mit TypeError, sobald blendWeight > 0 war
+     (ab 2 Spielen), und die Hard-KI lief ab dann bei JEDEM Zug synchron
+     im UI-Thread. Jetzt: Worker nutzt die übergebenen Priors, nur der
+     Haupt-Thread rechnet selbst. */
+  if (diff === 'hard' && globalThis.policyNet && policyNet.blendWeight > 0) {
+    const _bw = policyNet.blendWeight;
+    let _p = null, _h = null, _inp = null;
+    if (typeof policyNet.forward === 'function') {
+      _inp = policyNet.boardToInput(board, aiColor, policyNet._lastMove || null);
+      const _r = policyNet.forward(_inp);
+      _p = _r.probs; _h = _r.hidden;
+    } else {
+      _p = policyNet._netPriors;   /* Worker: vorberechnet aus postMessage */
+    }
+    if (_p) {
+      policyNet._netPriors = _p; policyNet._netHidden = _h;
+      policyNet._netInp    = _inp; policyNet._netBlend  = _bw;
+      scored.forEach(s => {
+        s.score = (1-_bw)*s.score + _bw * _p[s.m.idx] * PARAMS.netScoreScale;
+      });
+      scored.sort((a,b) => b.score - a.score);
+    }
+  }
+  _areaCacheValid = false;
+  const best = scored[0].score;
+
+  const PASS_GAIN_THRESHOLD = PARAMS.passGainThreshold;
+  const wantsToPass =
+    (mc > 40  && best < PARAMS.passMinMc40) ||
+    (mc > 80  && best < PARAMS.passMinMc80)  ||
+    (mc > 120 && best < PARAMS.passMinMc120)  ||
+    (best < PARAMS.passMinMc150 && mc > 150);
+
+  if (wantsToPass) {
+    let ownInAtari = false;
+    for (let k = 0; k < BOARD_SIZE; k++) {
+      if (_crisisOwn[k] === 100) { ownInAtari = true; break; }
+    }
+    const opp = aiColor === 1 ? 2 : 1;
+    buildCrisisMap(board, opp);
+    primeAreaCache(board, opp);   /* sonst rechnet evalEndgame pro Kandidat O(n) neu */
+    const oppLegal = getLegalMoves(board, opp, hs);
+    let oppBest = -Infinity;
+    for (const m of oppLegal) {
+      const sc = evaluateMove(board, m.idx, opp, mc, oppLegal.length);
+      if (sc > oppBest) oppBest = sc;
+    }
+    _areaCacheValid = false;
+    buildCrisisMap(board, aiColor);
+    const opponentGainsAlot = oppBest > PASS_GAIN_THRESHOLD;
+    if (!ownInAtari && !opponentGainsAlot) {
+      return {type:'pass', requestId:reqId};
+    }
+  }
+  let chosen;
+  if (diff === 'easy') {
+    const n = Math.max(1, Math.floor(scored.length * 0.25));
+    chosen = scored[Math.floor(Math.random() * n)].m;
+  } else if (diff === 'medium') {
+    const n = Math.max(1, Math.floor(scored.length * 0.08));
+    chosen = scored[Math.floor(Math.random() * n)].m;
+  } else {
+    /* ── Schwer: MCTS-PUCT (neu) oder Kandidaten+Rollouts (alt, useMCTS=0) ── */
+    if (PARAMS.useMCTS >= 1) {
+      const r = mctsPUCT(board, aiColor, captures, scored);
+      if (r) return {type:'stone', x:r.m.x, y:r.m.y, requestId:reqId,
+        info:`MCTS ${r.sims} Sims · ${r.share}% ${coordToLabel(r.m.x,r.m.y)} · Q ${r.q.toFixed(2)}`};
+      return {type:'pass', requestId:reqId};
+    }
+    let CAND, R, D;
+    let _hc = false;
+    for (let _i = 0; _i < BOARD_SIZE; _i++)
+      if (_crisisOwn[_i] >= PARAMS.crisisAtari || _crisisOpp[_i] >= PARAMS.crisisAtari) { _hc = true; break; }
+    if (_hc) {
+      CAND = PARAMS.crisisCand; R = PARAMS.crisisRoll; D = PARAMS.crisisDepth;
+    } else if (mc < PARAMS.openingMoves) {
+      CAND = PARAMS.candOpen; R = PARAMS.rollOpen; D = PARAMS.depthOpen;
+    } else if (mc <= PARAMS.endgameMoves && empty >= PARAMS.endgameEmpty) {
+      const f = empty > 200 ? 1.0 : empty > 100 ? 1.4 : 1.8;
+      CAND = Math.min(PARAMS.candMidMax, Math.round(PARAMS.candMid  * f));
+      R    = Math.max(PARAMS.rollMidMin, Math.round(PARAMS.rollMid  * f));
+      D    = Math.min(PARAMS.depthMidMax,Math.round(PARAMS.depthMid * f));
+    } else {
+      CAND = Math.min(PARAMS.candEnd,    Math.max(3, Math.round(empty * 0.15)));
+      R    = Math.max(PARAMS.rollEndMin, Math.round(PARAMS.rollEnd  * (empty < 30 ? 2.0 : 1.2)));
+      D    = Math.min(PARAMS.depthEndMax,Math.round(PARAMS.depthEnd * (empty < 30 ? 2.0 : 1.3)));
+    }
+    const cands = scored.slice(0, Math.min(CAND, scored.length));
+    if (!cands.length) return {type:'pass', requestId:reqId};
+    const opp = aiColor === 1 ? 2 : 1;
+    let bm = cands[0].m, bs = -Infinity;
+    const deadline = Date.now() + PARAMS.aiTimeBudget;
+    _simScratch.set(board);
+    for (const {m, score} of cands) {
+      if (Date.now() > deadline) break;
+      _simScratch[m.idx] = aiColor;
+      const {captured:cn, undo} = removeDeadGroupsUndoable(_simScratch, opp, m.idx);
+      const sc = {1:captures[1], 2:captures[2]}; sc[aiColor] += cn;
+      let tot = 0;
+      for (let r = 0; r < R; r++) tot += rollout(_simScratch, opp, histHashes, sc, D, aiColor);
+      const comb = (tot/R) * PARAMS.rolloutWeight + score * PARAMS.scoreWeight;
+      if (comb > bs) { bs = comb; bm = m; }
+      applyUndo(_simScratch, undo);
+      _simScratch[m.idx] = 0;
+    }
+    chosen = bm;
+  }
+  /* FIX Bug 7: _gameBuffer.push entfernt — applyAIResult übernimmt das.
+     Der Worker hat kein _gameBuffer (würde crashen), und im Sync-Fallback
+     würde applyAIResult sonst doppelt pushen. */
+  return {type:'stone', x:chosen.x, y:chosen.y, requestId:reqId};
+}
+</script>
+<script>
+'use strict';
+
+const KOMI = 7.5;
+const state = {
+  board: createBoard(), currentPlayer: 1, captures: {1:0,2:0},
+  boardHistory: new Set([computeZobrist(createBoard())]),
+  currentHash: computeZobrist(createBoard()),
+  consecutivePasses: 0, moveCount: 0, gameOver: false, log: [], lastMove: null,
+  aiEnabled: false, aiColor: 2, aiDifficulty: 'easy',
+  aiThinking: false, aiRequestId: 0, aiWorker: null, aiWorkerCtx: null, deadStones: new Set(), undoStack: []
+};
+
+/* Touch-Bedienung: erster Tipp = Vorschau, zweiter Tipp = setzen */
+let pendingTouch = null;
+
+function humanTurn() { return !state.aiEnabled || state.currentPlayer !== state.aiColor; }
+
+function saveUndoState() {
+  state.undoStack.push({
+    board: cloneBoard(state.board), currentPlayer: state.currentPlayer,
+    captures: {...state.captures}, currentHash: state.currentHash,
+    consecutivePasses: state.consecutivePasses, moveCount: state.moveCount,
+    gameOver: state.gameOver, logLength: state.log.length,
+    deadStones: new Set(state.deadStones), lastMove: state.lastMove
+  });
+  if (state.undoStack.length > 50) state.undoStack.shift();
+  updateUndoButton();
+}
+
+function undo() {
+  if (!state.undoStack.length || state.aiThinking) return;
+  const prev = state.undoStack.pop();
+  state.board = prev.board; state.currentPlayer = prev.currentPlayer;
+  state.captures = prev.captures; state.currentHash = prev.currentHash;
+  state.consecutivePasses = prev.consecutivePasses; state.moveCount = prev.moveCount;
+  state.gameOver = prev.gameOver; state.deadStones = prev.deadStones;
+  state.lastMove = prev.lastMove; pendingTouch = null;
+  state.log.splice(prev.logLength);
+  state.boardHistory = new Set([computeZobrist(createBoard())]);
+  for (const entry of state.undoStack) state.boardHistory.add(entry.currentHash);
+  state.boardHistory.add(state.currentHash);
+  document.getElementById('territory-panel').style.display = 'none';
+  drawStateToCache(); render(); updateUI(); updateAIStatus(); updateUndoButton();
+}
+
+function updateUndoButton() {
+  document.getElementById('btn-undo').disabled = !state.undoStack.length || state.aiThinking;
+}
+
+function placeStone(x, y) {
+  if (state.gameOver) return {ok:false,reason:'Spiel beendet.'};
+  const i = idx(x, y);
+  if (state.board[i] !== 0) return {ok:false,reason:'Feld besetzt.'};
+  const opp = state.currentPlayer === 1 ? 2 : 1;
+  const test = cloneBoard(state.board); test[i] = state.currentPlayer;
+  const cap = removeDeadGroups(test, opp, i);
+  if (cap === 0) {
+    const {liberties} = floodFill(test, i);
+    if (liberties.length === 0) return {ok:false,reason:'Suizid verboten.'};
+  }
+  const newHash = computeZobrist(test);
+  if (state.boardHistory.has(newHash)) return {ok:false,reason:'Superko verboten.'};
+  saveUndoState();
+  state.board = test; state.captures[state.currentPlayer] += cap;
+  state.currentHash = newHash; state.boardHistory.add(newHash);
+  state.consecutivePasses = 0; state.moveCount++;
+  state.lastMove = i; pendingTouch = null;
+  const sym = state.currentPlayer === 1 ? '●' : '○';
+  state.log.push(`${state.moveCount}. ${sym} ${coordToLabel(x,y)}${cap ? ` (+${cap})` : ''}`);
+  state.currentPlayer = opp;
+  drawStateToCache(); updateUndoButton();
+  return {ok:true};
+}
+
+function pass() {
+  if (state.gameOver) return;
+  saveUndoState();
+  const opp = state.currentPlayer === 1 ? 2 : 1;
+  const name = state.currentPlayer === 1 ? '● Schwarz' : '○ Weiß';
+  state.log.push(`${++state.moveCount}. ${name} passt`);
+  state.consecutivePasses++;
+  if (state.consecutivePasses >= 2) {
+    state.gameOver = true; state.log.push('— Spiel beendet (2× Pass) —');
+    resolveLifeAndDeath(); showFinalScore();
+  } else state.currentPlayer = opp;
+  updateUndoButton();
+}
+
+function resetGame() {
+  /* Worker-Pool beenden — neuer Worker beim nächsten Hard-Zug */
+  cleanupWorker();
+  state.workerDead = false;   /* Neues Spiel = neuer Versuch */
+  if (globalThis.policyNet) { policyNet._trained=false; policyNet._gameBuffer=[]; }
+  state.aiRequestId++;
+  const eb = createBoard(), eh = computeZobrist(eb);
+  Object.assign(state, {
+    board: eb, currentPlayer: 1, captures: {1:0,2:0},
+    boardHistory: new Set([eh]), currentHash: eh,
+    consecutivePasses: 0, moveCount: 0, gameOver: false, lastMove: null,
+    log: [], aiThinking: false, deadStones: new Set(), undoStack: []
+  });
+  pendingTouch = null;
+  document.getElementById('territory-panel').style.display = 'none';
+  drawStateToCache(); updateUndoButton();
+}
+
+function resolveLifeAndDeath() {
+  state.deadStones = new Set();
+  const processed = new Uint8Array(BOARD_SIZE);
+  for (let i = 0; i < BOARD_SIZE; i++) {
+    const color = state.board[i];
+    if (!color || processed[i]) continue;
+    const {group, liberties} = floodFill(state.board, i);
+    for (const g of group) processed[g] = 1;
+    if (liberties.length >= 5) continue;
+    const eyes = findEyes(state.board, group, color);
+    if (eyes.length >= 2) continue;
+    if (eyes.length === 1 && liberties.length >= 3) continue;
+    const maxLib = eyes.length === 0 ? 3 : 2;
+    if (liberties.length <= maxLib)
+      for (const g of group) state.deadStones.add(g);
+  }
+  for (const i of state.deadStones) {
+    const color = state.board[i];
+    state.board[i] = 0;
+    if (color) state.captures[color === 1 ? 2 : 1]++;
+  }
+  if (state.deadStones.size) {
+    state.log.push(`! ${state.deadStones.size} tote Steine entfernt`);
+    drawStateToCache();
+  }
+}
+
+function finalAreaScore() {
+  const area = {1:0, 2:0}, visited = new Uint8Array(BOARD_SIZE);
+  for (let i = 0; i < BOARD_SIZE; i++) if (state.board[i]) area[state.board[i]]++;
+  for (let i = 0; i < BOARD_SIZE; i++) {
+    if (state.board[i] || visited[i]) continue;
+    const region = [], queue = [i], borders = new Set();
+    let head = 0; visited[i] = 1;
+    while (head < queue.length) {
+      const c = queue[head++]; region.push(c);
+      for (const n of NEIGHBORS[c]) {
+        const cell = state.board[n];
+        if (!cell) { if (!visited[n]) { visited[n] = 1; queue.push(n); } }
+        else borders.add(cell);
+      }
+    }
+    if (borders.size === 1) area[[...borders][0]] += region.length;
+  }
+  return area;
+}
+
+function showFinalScore() {
+  const a = finalAreaScore(), bt = a[1], wt = a[2] + KOMI;
+  const diff = Math.abs(bt - wt), winner = bt > wt ? 'Schwarz' : 'Weiß';
+  document.getElementById('final-score').textContent = `${winner} +${diff.toFixed(1)}`;
+  document.getElementById('territory-panel').style.display = 'flex';
+  if (globalThis.policyNet && !policyNet._trained) {
+    policyNet._trained = true;
+    const _a = finalAreaScore(), _ac = state.aiColor;
+    const _ai = _ac===1 ? _a[1] : _a[2]+KOMI, _op = _ac===1 ? _a[2]+KOMI : _a[1];
+    policyNet.trainGame(_ai > _op ? 1 : -1);
+  }
+}
+
+function applyAIResult(result, reqId, netInp, netPriors, netHidden) {
+  if (!result || reqId !== state.aiRequestId) {
+    state.aiThinking = false; updateAIStatus(); return;
+  }
+  if (state.gameOver || state.currentPlayer !== state.aiColor) {
+    state.aiThinking = false; updateAIStatus(); return;
+  }
+  if (netPriors && result.type === 'stone' && globalThis.policyNet) {
+    policyNet._gameBuffer.push({
+      inp: netInp, probs: netPriors, hidden: netHidden,
+      moveIdx: idx(result.x, result.y)
+    });
+  }
+  if (result.type === 'stone') {
+    const r = placeStone(result.x, result.y);
+    if (!r.ok) {
+      state.log.push(`! KI: ${r.reason} → Fallback`);
+      const fb = findAnyLegalMove(state.aiColor);
+      if (fb) { const r2 = placeStone(fb.x, fb.y); if (!r2.ok) pass(); }
+      else pass();
+    } else if (result.info) {
+      state.log.push(`   ↳ ${result.info}`);
+    }
+  } else pass();
+  state.aiThinking = false;
+  render(); updateUI(); updateAIStatus(); updateUndoButton();
+  if (!state.gameOver && state.aiEnabled && state.currentPlayer === state.aiColor) triggerAIMove();
+}
+
+/* ═══ Worker-Fallback-Kette (aus der Session vom 30.6. zurückportiert) ═══
+   1. data:-URL  — unter file:// (Origin "null") oft der einzige Weg
+   2. blob:-URL  — Standardweg (https / GitHub Pages)
+   3. Hauptthread synchron — greift garantiert
+   Neu gegenüber damals: workerDead-Flag verhindert, dass ein kaputter
+   Worker bei jedem Zug neu gebaut wird und erneut crasht; onerror nutzt
+   die AKTUELLE reqId statt der beim Erstellen eingefrorenen (sonst
+   konnte aiThinking nach spätem Worker-Fehler dauerhaft hängen). */
+function buildWorkerSource() {
+  const aiSrc = document.getElementById('shared-go-logic').textContent
+              + '\n' + document.getElementById('worker-ai').textContent;
+  const handler = `
+    self.onmessage = function(e) {
+      const d = e.data;
+      Object.assign(PARAMS, d.params);
+      if (d.netPriors) {
+        globalThis.policyNet = {
+          _netPriors: new Float32Array(d.netPriors),
+          _netHidden: null, _netInp: null,
+          _netBlend: d.netBlend, _gameBuffer: [],
+          blendWeight: d.netBlend
+        };
+      }
+      const histSet = new Set(d.histHashes);
+      const result = getAIMove(
+        new Uint8Array(d.board), d.aiColor, histSet,
+        d.captures, d.mc, 'hard', d.reqId
+      );
+      if (globalThis.policyNet) globalThis.policyNet._netPriors = null;
+      self.postMessage({...result, reqId: d.reqId});
+    };`;
+  return aiSrc + '\n' + handler;
+}
+
+function cleanupWorker() {
+  if (state.aiWorker) { state.aiWorker.terminate(); state.aiWorker = null; }
+  if (state.aiWorkerCtx) {
+    if (state.aiWorkerCtx.url && state.aiWorkerCtx.url.startsWith('blob:'))
+      URL.revokeObjectURL(state.aiWorkerCtx.url);
+    state.aiWorkerCtx = null;
+  }
+}
+
+function fallbackToMainThread(reqId, netInp, netPriors, netHidden) {
+  setTimeout(() => {
+    if (reqId !== state.aiRequestId) return;
+    const r = getAIMove(state.board, state.aiColor,
+      Array.from(state.boardHistory), {...state.captures},
+      state.moveCount, 'hard', reqId);
+    applyAIResult(r, reqId, netInp, netPriors, netHidden);
+  }, 10);
+}
+
+function attachWorkerHandlers() {
+  state.aiWorker.onmessage = function(e) {
+    const ctx = state.aiWorkerCtx;
+    applyAIResult(e.data, e.data.reqId,
+      ctx ? ctx.netInp : null, ctx ? ctx.netPriors : null, ctx ? ctx.netHidden : null);
+  };
+  state.aiWorker.onerror = function(err) {
+    console.error('[Worker] Fehler:', err.message || err);
+    const ctx = state.aiWorkerCtx;
+    state.workerDead = true;   /* nicht bei jedem Zug erneut versuchen */
+    cleanupWorker();
+    fallbackToMainThread(state.aiRequestId,
+      ctx ? ctx.netInp : null, ctx ? ctx.netPriors : null, ctx ? ctx.netHidden : null);
+  };
+}
+
+function triggerAIMove() {
+  if (!state.aiEnabled || state.gameOver || state.currentPlayer !== state.aiColor) return;
+  state.aiThinking = true;
+  const reqId = ++state.aiRequestId;
+  updateAIStatus(); updateUndoButton();
+
+  let _netInp = null, _netPriors = null, _netHidden = null;
+  if (globalThis.policyNet && policyNet.blendWeight > 0 && state.aiDifficulty === 'hard') {
+    /* Letzten Zug mitgeben — Feature-Layer 8 war vorher immer leer */
+    const _lm = state.lastMove !== null ? {x: xOf(state.lastMove), y: yOf(state.lastMove)} : null;
+    policyNet._lastMove = _lm;
+    _netInp = policyNet.boardToInput(state.board, state.aiColor, _lm);
+    const {probs, hidden} = policyNet.forward(_netInp);
+    _netPriors = probs; _netHidden = hidden;
+  }
+
+  if (state.aiDifficulty === 'hard') {
+    if (state.workerDead) { fallbackToMainThread(reqId, _netInp, _netPriors, _netHidden); return; }
+    try {
+      if (!state.aiWorker) {
+        const workerSrc = buildWorkerSource();
+        try {
+          /* Versuch 1: data:-URL. UTF-8-sicheres Base64 — btoa() allein
+             crasht an den deutschen Umlauten in den Kommentaren. */
+          const dataUrl = 'data:application/javascript;base64,'
+                        + btoa(unescape(encodeURIComponent(workerSrc)));
+          state.aiWorker = new Worker(dataUrl);
+          state.aiWorkerCtx = {url: dataUrl, netInp: null, netPriors: null, netHidden: null};
+        } catch (e1) {
+          console.warn('[Worker] data:-URL fehlgeschlagen, versuche blob:', e1.message || e1);
+          /* Versuch 2: blob:-URL */
+          const blob = new Blob([workerSrc], {type: 'application/javascript'});
+          const url  = URL.createObjectURL(blob);
+          state.aiWorker = new Worker(url);
+          state.aiWorkerCtx = {url: url, netInp: null, netPriors: null, netHidden: null};
+        }
+        attachWorkerHandlers();
+      }
+      /* Kontext für diesen Zug merken (onmessage braucht die Priors) */
+      state.aiWorkerCtx.netInp    = _netInp;
+      state.aiWorkerCtx.netPriors = _netPriors;
+      state.aiWorkerCtx.netHidden = _netHidden;
+
+      state.aiWorker.postMessage({
+        board:    Array.from(state.board),
+        aiColor:  state.aiColor,
+        histHashes: Array.from(state.boardHistory),
+        captures: {...state.captures},
+        mc:       state.moveCount,
+        reqId,
+        params:   JSON.parse(JSON.stringify(PARAMS)),
+        netPriors: _netPriors ? Array.from(_netPriors) : null,
+        netBlend:  _netPriors ? policyNet.blendWeight : 0
+      });
+    } catch(e) {
+      /* Versuch 3: Hauptthread */
+      console.warn('[triggerAIMove] Worker nicht verfügbar, synchron:', e);
+      state.workerDead = true;
+      cleanupWorker();
+      fallbackToMainThread(reqId, _netInp, _netPriors, _netHidden);
+    }
+  } else {
+    setTimeout(() => {
+      if (reqId !== state.aiRequestId) return;
+      if (state.gameOver || state.currentPlayer !== state.aiColor) {
+        state.aiThinking = false; updateAIStatus(); return;
+      }
+      const r = getAIMove(state.board, state.aiColor,
+        Array.from(state.boardHistory), {...state.captures},
+        state.moveCount, state.aiDifficulty, reqId);
+      applyAIResult(r, reqId, null, null, null);
+    }, 50);
+  }
+}
+
+function findAnyLegalMove(color) {
+  const opp = color === 1 ? 2 : 1;
+  for (let i = 0; i < BOARD_SIZE; i++) {
+    if (state.board[i] !== 0) continue;
+    const test = cloneBoard(state.board); test[i] = color;
+    const cap = removeDeadGroups(test, opp, i);
+    if (cap > 0 && !state.boardHistory.has(computeZobrist(test)))
+      return {x: xOf(i), y: yOf(i)};
+  }
+  for (let i = 0; i < BOARD_SIZE; i++) {
+    if (state.board[i] !== 0) continue;
+    const test = cloneBoard(state.board); test[i] = color;
+    const cap = removeDeadGroups(test, opp, i);
+    if (cap === 0 && floodFill(test, i).liberties.length === 0) continue;
+    if (!state.boardHistory.has(computeZobrist(test)))
+      return {x: xOf(i), y: yOf(i)};
+  }
+  return null;
+}
+
+const canvas = document.getElementById('board'), ctx = canvas.getContext('2d');
+let layout = {}, grainCanvas = null;
+let boardCache = document.createElement('canvas'), stateCache = document.createElement('canvas');
+const bCtx = boardCache.getContext('2d'), sCtx = stateCache.getContext('2d');
+
+function computeLayout() {
+  const max = Math.min(innerWidth * 0.92, innerHeight * 0.82, 640);
+  const M = Math.round(max / 22), C = Math.round((max - M*2) / (SIZE-1));
+  return {MARGIN: M, CELL: C, S: M*2 + C*(SIZE-1)};
+}
+
+function generateGrain() {
+  const {S} = layout; grainCanvas = document.createElement('canvas');
+  grainCanvas.width = grainCanvas.height = S;
+  const g = grainCanvas.getContext('2d'); g.fillStyle = '#c8a05a'; g.fillRect(0,0,S,S);
+  for (let i = 0; i < 30; i++) {
+    const px = Math.random()*S; g.beginPath(); g.moveTo(px,0); g.lineTo(px+8,S);
+    g.strokeStyle = `rgba(0,0,0,${0.012+Math.random()*0.012})`;
+    g.lineWidth = 0.6+Math.random(); g.stroke();
+  }
+}
+
+function drawBoardToCache() {
+  const {MARGIN:M, CELL:C, S} = layout, c = bCtx;
+  c.drawImage(grainCanvas, 0, 0);
+  c.strokeStyle = '#5a3a10'; c.lineWidth = 0.8;
+  for (let i = 0; i < SIZE; i++) {
+    const p = M + i*C;
+    c.beginPath(); c.moveTo(p, M); c.lineTo(p, M+(SIZE-1)*C); c.stroke();
+    c.beginPath(); c.moveTo(M, p); c.lineTo(M+(SIZE-1)*C, p); c.stroke();
+  }
+  c.strokeStyle = '#4a2e08'; c.lineWidth = 1.5;
+  c.strokeRect(M, M, (SIZE-1)*C, (SIZE-1)*C);
+  c.fillStyle = '#5a3a10';
+  c.font = `${Math.round(C*0.38)}px 'Noto Sans Mono',monospace`;
+  c.textAlign = 'center'; c.textBaseline = 'middle';
+  for (let i = 0; i < SIZE; i++) {
+    const gx = M + i*C, gy = M + i*C;
+    c.fillText(COL_LETTERS[i], gx, M/2); c.fillText(COL_LETTERS[i], gx, S-M/2);
+    c.fillText(String(SIZE-i), M/2, gy); c.fillText(String(SIZE-i), S-M/2, gy);
+  }
+  c.fillStyle = '#4a2e08';
+  for (const [hx,hy] of HOSHI_XY) {
+    c.beginPath(); c.arc(M+hx*C, M+hy*C, C*0.13, 0, Math.PI*2); c.fill();
+  }
+}
+
+function drawStoneTo(ct, x, y, color, isDead) {
+  const {MARGIN:M, CELL:C} = layout, cx = M+x*C, cy = M+y*C, r = C*0.46;
+  ct.beginPath(); ct.arc(cx, cy, r, 0, Math.PI*2);
+  if (color === 1) {
+    const g = ct.createRadialGradient(cx-r*.3, cy-r*.3, r*.05, cx, cy, r);
+    g.addColorStop(0,'#666'); g.addColorStop(.3,'#2a2a2a'); g.addColorStop(1,'#0d0d0d');
+    ct.shadowColor='rgba(0,0,0,.6)'; ct.shadowBlur=C*.25;
+    ct.shadowOffsetX=C*.06; ct.shadowOffsetY=C*.08;
+    ct.fillStyle=g; ct.fill(); ct.shadowColor='transparent';
+    ct.beginPath(); ct.arc(cx-r*.28, cy-r*.28, r*.22, 0, Math.PI*2);
+    ct.fillStyle='rgba(255,255,255,.15)'; ct.fill();
+  } else {
+    const g = ct.createRadialGradient(cx-r*.3, cy-r*.35, r*.05, cx, cy, r);
+    g.addColorStop(0,'#fff'); g.addColorStop(.5,'#ede8df'); g.addColorStop(1,'#c8c0b0');
+    ct.shadowColor='rgba(0,0,0,.45)'; ct.shadowBlur=C*.22;
+    ct.shadowOffsetX=C*.05; ct.shadowOffsetY=C*.07;
+    ct.fillStyle=g; ct.fill(); ct.shadowColor='transparent';
+    ct.strokeStyle='rgba(120,100,70,.35)'; ct.lineWidth=0.6; ct.stroke();
+    ct.beginPath(); ct.arc(cx-r*.28, cy-r*.3, r*.2, 0, Math.PI*2);
+    ct.fillStyle='rgba(255,255,255,.7)'; ct.fill();
+  }
+  if (isDead) {
+    ct.strokeStyle='#c0392b'; ct.lineWidth=3; ct.beginPath();
+    ct.moveTo(cx-r*.6,cy-r*.6); ct.lineTo(cx+r*.6,cy+r*.6);
+    ct.moveTo(cx+r*.6,cy-r*.6); ct.lineTo(cx-r*.6,cy+r*.6); ct.stroke();
+  }
+}
+
+function drawStateToCache() {
+  sCtx.drawImage(boardCache, 0, 0);
+  for (let i = 0; i < BOARD_SIZE; i++)
+    if (state.board[i]) drawStoneTo(sCtx, xOf(i), yOf(i), state.board[i], state.deadStones.has(i));
+  /* Letzter-Zug-Markierung */
+  const lm = state.lastMove;
+  if (lm !== null && state.board[lm]) {
+    const {MARGIN:M, CELL:C} = layout;
+    sCtx.beginPath();
+    sCtx.arc(M + xOf(lm)*C, M + yOf(lm)*C, C*0.2, 0, Math.PI*2);
+    sCtx.strokeStyle = state.board[lm] === 1 ? 'rgba(255,255,255,.85)' : 'rgba(0,0,0,.6)';
+    sCtx.lineWidth = Math.max(1.5, C*0.07);
+    sCtx.stroke();
+  }
+}
+
+function resizeCanvas() {
+  layout = computeLayout();
+  canvas.width = canvas.height = layout.S;
+  boardCache.width = boardCache.height = layout.S;
+  stateCache.width = stateCache.height = layout.S;
+  generateGrain(); drawBoardToCache(); drawStateToCache();
+}
+resizeCanvas();
+
+function render() { ctx.drawImage(stateCache, 0, 0); }
+
+function drawGhost(col, row) {
+  const {MARGIN:M, CELL:C} = layout;
+  ctx.beginPath(); ctx.arc(M+col*C, M+row*C, C*0.44, 0, Math.PI*2);
+  ctx.fillStyle = state.currentPlayer===1 ? 'rgba(28,28,28,.4)' : 'rgba(242,237,228,.5)';
+  ctx.fill();
+}
+
+const elStone=document.getElementById('turn-stone'), elLabel=document.getElementById('turn-label');
+const elCapB=document.getElementById('captures-b'), elCapW=document.getElementById('captures-w');
+const elMsg=document.getElementById('message'), elLog=document.getElementById('log');
+const elAI=document.getElementById('ai-status');
+
+function updateUI(msg='') {
+  if (window.policyNet) {
+    const nwEl = document.getElementById('nw-indicator');
+    if (nwEl) {
+      const bw = policyNet.blendWeight;
+      if (bw <= 0) { nwEl.textContent='🧠'; nwEl.title='PolicyNet: Warmup'; nwEl.style.opacity='.35'; }
+      else { nwEl.textContent=`🧠${(bw*100).toFixed(0)}%`; nwEl.title=`PolicyNet aktiv · ${policyNet.gamesPlayed} Spiele · ${Math.round(policyNet.wins/policyNet.gamesPlayed*100)}% Siege`; nwEl.style.opacity='1'; nwEl.style.color=bw>0.15?'var(--green)':'var(--wood)'; }
+    }
+    policyNet.dashUpdate();
+  }
+  const isB = state.currentPlayer===1;
+  elStone.className=isB?'black':'white'; elLabel.textContent=isB?'Schwarz':'Weiß';
+  elCapB.textContent=state.captures[1]; elCapW.textContent=state.captures[2];
+  elMsg.textContent=state.gameOver?'Spiel beendet':(msg||'–');
+  elLog.innerHTML=state.log.slice(-40).map(l=>`<div>${l}</div>`).join('');
+  elLog.scrollTop=elLog.scrollHeight;
+}
+
+function updateAIStatus() {
+  const labels={easy:'Leicht',medium:'Mittel',hard:'Schwer'};
+  const side=state.aiColor===1?'Schwarz':'Weiß';
+  if(!state.aiEnabled){elAI.textContent='KI ist deaktiviert';elAI.className='ai-status';return;}
+  elAI.textContent=state.aiThinking?'KI denkt...':`KI aktiv · ${side} · ${labels[state.aiDifficulty]}`;
+  elAI.className=`ai-status${state.aiThinking?' ai-thinking':''}`;
+}
+
+function eventToBoard(e, hitRadius) {
+  const rect=canvas.getBoundingClientRect();
+  const mx=(e.clientX-rect.left)*(canvas.width/rect.width);
+  const my=(e.clientY-rect.top)*(canvas.height/rect.height);
+  const{MARGIN:M,CELL:C}=layout;
+  const col=Math.round((mx-M)/C),row=Math.round((my-M)/C);
+  if(col<0||col>=SIZE||row<0||row>=SIZE)return null;
+  if(Math.hypot(mx-(M+col*C),my-(M+row*C))>C*hitRadius)return null;
+  return {col,row};
+}
+
+function commitMove(col,row){
+  const res=placeStone(col,row);render();updateUI(res.ok?'':res.reason);
+  if(res.ok&&!state.gameOver&&!humanTurn())triggerAIMove();
+}
+
+/* pointerup statt click: Maus setzt direkt; Touch braucht zwei Tipps
+   (1. Tipp = Vorschau + Koordinate, 2. Tipp auf denselben Punkt = setzen).
+   Fangradius für Finger großzügiger als für die Maus. */
+canvas.addEventListener('pointerup', e => {
+  if(state.gameOver||!humanTurn())return;
+  if(e.pointerType==='mouse'&&e.button!==0)return;
+  const isTouch = e.pointerType!=='mouse';
+  const pos = eventToBoard(e, isTouch?0.68:0.48);
+  if(!pos){ pendingTouch=null; render(); return; }
+  if(!isTouch){ commitMove(pos.col,pos.row); return; }
+  if(pendingTouch&&pendingTouch.col===pos.col&&pendingTouch.row===pos.row){
+    pendingTouch=null;
+    commitMove(pos.col,pos.row);
+  } else if(state.board[idx(pos.col,pos.row)]===0){
+    pendingTouch=pos;
+    render(); drawGhost(pos.col,pos.row);
+    updateUI(`${coordToLabel(pos.col,pos.row)} — erneut tippen zum Setzen`);
+  } else {
+    pendingTouch=null; render();
+  }
+});
+
+canvas.addEventListener('mousemove', e => {
+  if(state.gameOver||!humanTurn()||pendingTouch)return;
+  const rect=canvas.getBoundingClientRect();
+  const mx=(e.clientX-rect.left)*(canvas.width/rect.width);
+  const my=(e.clientY-rect.top)*(canvas.height/rect.height);
+  const{MARGIN:M,CELL:C}=layout;
+  const col=Math.round((mx-M)/C),row=Math.round((my-M)/C);
+  render();
+  if(col>=0&&col<SIZE&&row>=0&&row<SIZE&&state.board[idx(col,row)]===0)drawGhost(col,row);
+});
+canvas.addEventListener('mouseleave',()=>{
+  render();
+  if(pendingTouch)drawGhost(pendingTouch.col,pendingTouch.row);
+});
+
+document.getElementById('btn-ai-toggle').addEventListener('click',function(){
+  state.aiEnabled=!state.aiEnabled;
+  this.textContent=state.aiEnabled?'KI deaktivieren':'KI aktivieren';
+  this.classList.toggle('active-mode',state.aiEnabled);
+  updateAIStatus();
+  if(state.aiEnabled&&!state.gameOver&&!humanTurn())triggerAIMove();
+});
+
+document.querySelectorAll('.diff-btn').forEach(btn=>btn.addEventListener('click',function(){
+  document.querySelectorAll('.diff-btn').forEach(b=>b.classList.remove('active'));
+  this.classList.add('active');state.aiDifficulty=this.dataset.diff;updateAIStatus();
+  if(state.aiEnabled&&!state.gameOver&&!humanTurn()){state.aiRequestId++;triggerAIMove();}
+}));
+
+document.querySelectorAll('.color-btn').forEach(btn=>btn.addEventListener('click',function(){
+  document.querySelectorAll('.color-btn').forEach(b=>b.classList.remove('active'));
+  this.classList.add('active');state.aiColor=parseInt(this.dataset.color);updateAIStatus();
+  if(state.aiEnabled&&!state.gameOver&&!humanTurn()){state.aiRequestId++;triggerAIMove();}
+}));
+
+document.getElementById('btn-pass').addEventListener('click',()=>{
+  if(state.gameOver||!humanTurn())return;
+  pass();render();updateUI(state.gameOver?'Beide gepasst.':'');
+  if(!state.gameOver&&!humanTurn())triggerAIMove();
+});
+
+document.getElementById('btn-undo').addEventListener('click',()=>{
+  if (state.aiEnabled) { undo(); undo(); } else { undo(); }
+  if (state.aiEnabled && !state.gameOver && state.currentPlayer === state.aiColor) triggerAIMove();
+});
+
+document.getElementById('btn-reset').addEventListener('click',()=>{
+  resetGame();render();updateUI();updateAIStatus();
+  if(state.aiEnabled&&!humanTurn())triggerAIMove();
+});
+
+document.getElementById('btn-copy-log').addEventListener('click', () => {
+  const text = state.log.join('\n');
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = document.getElementById('btn-copy-log');
+    btn.textContent = '✓'; btn.style.color = 'var(--green)';
+    setTimeout(() => { btn.textContent = '📋'; btn.style.color = ''; }, 1500);
+  }).catch(() => {
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+  });
+});
+render();updateUI();updateAIStatus();updateUndoButton();
+</script>
+<script>
+'use strict';
+
+class PolicyNet {
+  constructor() {
+    this.IN  = 3971;   // 10 Feature-Layer: 2 Steine + 4 Lib + Atari + Ko + LetzterZug + Rand + Territorium
+    this.HID = 128;    // mehr Lernkapazität
+    this.OUT = 361;
+
+    this.gamesPlayed = 0;
+    this.wins        = 0;
+    this.lastResult  = null;
+
+    const he = n => Math.sqrt(2/n);
+    this.W1 = this._rand(this.HID * this.IN,  he(this.IN));
+    this.b1 = new Float32Array(this.HID);
+    this.W2 = this._rand(this.OUT * this.HID, he(this.HID));
+    this.b2 = new Float32Array(this.OUT);
+
+    this._netPriors  = null;
+    this._netHidden  = null;
+    this._netInp     = null;
+    this._netBlend   = 0;
+    this._gameBuffer = [];
+    this._trained    = false;
+    this._lastMove   = null;
+
+    if (this.load()) {
+      console.log(`[PolicyNet] Geladen: ${this.gamesPlayed} Spiele · ${this.wins} Siege`);
+    } else {
+      console.log('[PolicyNet] Neue Gewichte initialisiert.');
+    }
+  }
+
+  get blendWeight() {
+    if (this.gamesPlayed < 2) return 0;
+    return Math.min(PARAMS.netMaxBlend,
+      (this.gamesPlayed / Math.max(1, PARAMS.netWarmup)) * PARAMS.netMaxBlend);
+  }
+
+  _rand(n, scale) {
+    const a = new Float32Array(n);
+    for (let i = 0; i < n; i++) a[i] = (Math.random()*2-1) * scale;
+    return a;
+  }
+
+  boardToInput(board, color, lastMove = null, koPos = null) {
+    const inp = new Float32Array(this.IN);
+    const opp = color === 1 ? 2 : 1;
+    // Layer 0-1: eigene / gegnerische Steine (0..721)
+    for (let i = 0; i < 361; i++) {
+      if      (board[i] === color) inp[i]     = 1;
+      else if (board[i] === opp)   inp[361+i] = 1;
+    }
+    // Freiheiten pro Stein vorberechnen
+    const liberties = new Uint8Array(361);
+    const visited   = new Uint8Array(361);
+    for (let i = 0; i < 361; i++) {
+      if (board[i] === 0 || visited[i]) continue;
+      const ff = floodFill(board, i);
+      const L = ff.liberties.length;
+      for (const g of ff.group) { visited[g] = 1; liberties[g] = L; }
+    }
+    // Layer 2-5: Freiheiten one-hot 1..4+ (722..2165)
+    for (let i = 0; i < 361; i++) {
+      if (board[i] === 0) continue;
+      const lib = Math.min(Math.max(liberties[i], 1), 4);
+      inp[722 + i * 4 + (lib - 1)] = 1;
+    }
+    // Layer 6: Atari (genau 1 Freiheit) (2166..2526)
+    for (let i = 0; i < 361; i++) {
+      if (board[i] && liberties[i] === 1) inp[722 + 361*4 + i] = 1;
+    }
+    // Layer 7: Ko-Position
+    if (koPos !== null && koPos >= 0) inp[722 + 361*5 + koPos] = 1;
+    // Layer 8: letzter Zug
+    if (lastMove !== null) {
+      const li = idx(lastMove.x, lastMove.y);
+      inp[722 + 361*6 + li] = 1;
+    }
+    // Layer 9: Rand-Distanz (normalisiert)
+    for (let i = 0; i < 361; i++) {
+      const x = xOf(i), y = yOf(i);
+      inp[722 + 361*7 + i] = Math.min(x, SIZE-1-x, y, SIZE-1-y) / (SIZE/2);
+    }
+    // Layer 10: einfaches eigenes Territorium
+    for (let i = 0; i < 361; i++) {
+      if (board[i] === color) { inp[722 + 361*8 + i] = 1; continue; }
+      if (board[i] !== 0) continue;
+      let ownT = true;
+      for (const n of NEIGHBORS[i]) if (board[n] === opp) { ownT = false; break; }
+      if (ownT) inp[722 + 361*8 + i] = 1;
+    }
+    return inp;
+  }
+
+  forward(inp) {
+    const {HID, IN, OUT} = this;
+    const h = new Float32Array(HID);
+    for (let j = 0; j < HID; j++) {
+      let s = this.b1[j], base = j*IN;
+      for (let i = 0; i < IN; i++) s += this.W1[base+i] * inp[i];
+      h[j] = s > 0 ? s : 0;
+    }
+    const logits = new Float32Array(OUT);
+    let maxL = -Infinity;
+    for (let k = 0; k < OUT; k++) {
+      let s = this.b2[k], base = k*HID;
+      for (let j = 0; j < HID; j++) s += this.W2[base+j] * h[j];
+      if ((logits[k] = s) > maxL) maxL = s;
+    }
+    const probs = new Float32Array(OUT);
+    let sumE = 0;
+    for (let k = 0; k < OUT; k++) { probs[k] = Math.exp(logits[k]-maxL); sumE += probs[k]; }
+    for (let k = 0; k < OUT; k++) probs[k] /= sumE;
+    return {probs, hidden: h};
+  }
+
+  _backward(inp, hidden, probs, moveIdx, reward) {
+    const {HID, IN, OUT} = this;
+    const lr = PARAMS.netLR * reward;
+    const dL = new Float32Array(OUT);
+    for (let k = 0; k < OUT; k++) dL[k] = -(probs[k] - (k===moveIdx ? 1 : 0)) * lr;
+    for (let k = 0; k < OUT; k++) {
+      if (Math.abs(dL[k]) < 1e-9) continue;
+      this.b2[k] += dL[k];
+      const base = k*HID;
+      for (let j = 0; j < HID; j++) this.W2[base+j] += dL[k] * hidden[j];
+    }
+    const dH = new Float32Array(HID);
+    for (let j = 0; j < HID; j++) {
+      if (hidden[j] <= 0) continue;
+      for (let k = 0; k < OUT; k++) dH[j] += this.W2[k*HID+j] * dL[k];
+    }
+    for (let j = 0; j < HID; j++) {
+      if (Math.abs(dH[j]) < 1e-9) continue;
+      this.b1[j] += dH[j];
+      const base = j*IN;
+      for (let i = 0; i < IN; i++) this.W1[base+i] += dH[j] * inp[i];
+    }
+  }
+
+  trainGame(reward) {
+    const buf = this._gameBuffer;
+    if (!buf.length) { console.log('[PolicyNet] Kein Buffer — kein Training.'); return; }
+    for (const {inp, probs, hidden, moveIdx} of buf) {
+      this._backward(inp, hidden, probs, moveIdx, reward);
+    }
+    this.gamesPlayed++;
+    if (reward > 0) this.wins++;
+    this.lastResult  = reward;
+    this._gameBuffer = [];
+    this.save();
+    this.dashUpdate();
+    const wr = Math.round(this.wins/this.gamesPlayed*100);
+    console.log(`[PolicyNet] Spiel ${this.gamesPlayed}: ${reward>0?'Sieg ✓':'Niederlage ✗'} | Siege: ${wr}% | Blend: ${(this.blendWeight*100).toFixed(0)}%`);
+  }
+
+  save() {
+    try {
+      const enc = a => {
+        const u = new Uint8Array(a.buffer); let s = '';
+        for (let i = 0; i < u.length; i++) s += String.fromCharCode(u[i]);
+        return btoa(s);
+      };
+      localStorage.setItem('go_pnet', JSON.stringify({
+        W1:enc(this.W1), b1:enc(this.b1),
+        W2:enc(this.W2), b2:enc(this.b2),
+        games:this.gamesPlayed, wins:this.wins
+      }));
+    } catch(e) { console.warn('[PolicyNet] Speichern fehlgeschlagen:', e); }
+  }
+
+  load() {
+    try {
+      const raw = localStorage.getItem('go_pnet');
+      if (!raw) return false;
+      const d = JSON.parse(raw);
+      const dec = (s,C) => {
+        const r=atob(s), b=new Uint8Array(r.length);
+        for(let i=0;i<r.length;i++) b[i]=r.charCodeAt(i);
+        return new C(b.buffer);
+      };
+      const w1=dec(d.W1,Float32Array), w2=dec(d.W2,Float32Array);
+      // Dimensions-Check: alte 722×64-Gewichte verwerfen (neues Netz ist 3971×128)
+      if (w1.length !== this.HID*this.IN || w2.length !== this.OUT*this.HID) {
+        console.log('[PolicyNet] Gespeicherte Gewichte haben andere Dimension — starte neu.');
+        return false;
+      }
+      this.W1=w1; this.b1=dec(d.b1,Float32Array);
+      this.W2=w2; this.b2=dec(d.b2,Float32Array);
+      this.gamesPlayed=d.games||0; this.wins=d.wins||0;
+      return true;
+    } catch(e) { return false; }
+  }
+
+  reset() {
+    localStorage.removeItem('go_pnet');
+    const he = n => Math.sqrt(2/n);
+    this.W1=this._rand(this.HID*this.IN, he(this.IN));
+    this.b1=new Float32Array(this.HID);
+    this.W2=this._rand(this.OUT*this.HID, he(this.HID));
+    this.b2=new Float32Array(this.OUT);
+    this.gamesPlayed=0; this.wins=0; this.lastResult=null;
+    this._gameBuffer=[]; this._trained=false;
+    this.save(); this.dashUpdate();
+    console.log('[PolicyNet] Zurückgesetzt.');
+  }
+
+  dashUpdate() {
+    const el = id => document.getElementById(id);
+    if (!el('pn-games')) return;
+    el('pn-games').textContent = this.gamesPlayed;
+    const wr = this.gamesPlayed > 0 ? Math.round(this.wins/this.gamesPlayed*100) : 0;
+    el('pn-wins').textContent  = `${this.wins} (${wr}%)`;
+    el('pn-blend').textContent = `${(this.blendWeight*100).toFixed(0)}%`;
+    const res = el('pn-result');
+    res.textContent = this.lastResult===null ? '—' : this.lastResult>0 ? '✓ Sieg' : '✗ Niederlage';
+    res.style.color = this.lastResult===null ? '' : this.lastResult>0 ? 'var(--green)' : 'var(--red)';
+    const bar = el('pn-warmup-bar');
+    if (bar) bar.style.width = Math.min(100, (this.gamesPlayed/Math.max(1,PARAMS.netWarmup))*100)+'%';
+  }
+}
+
+globalThis.policyNet = new PolicyNet();
+</script>
+<style>
+#pdash { margin-top: 0; }
+#pdash .panel-title { cursor:pointer; user-select:none; display:flex; justify-content:space-between; align-items:center; }
+#pdash .panel-title:hover { color: var(--wood-light); }
+#pdash-arrow { font-size:.7rem; transition: transform .2s; }
+#pdash-body { display:none; margin-top:10px; }
+#pdash-body.open { display:block; }
+
+.pd-section { margin-bottom:10px; }
+.pd-sec-title {
+  font-size:.55rem; letter-spacing:.2em; color:var(--wood); text-transform:uppercase;
+  border-bottom:1px solid var(--ui-border); padding-bottom:4px; margin-bottom:6px;
+  cursor:pointer; display:flex; justify-content:space-between;
+}
+.pd-sec-title:hover { color:var(--wood-light); }
+.pd-sec-arrow { font-size:.55rem; }
+.pd-rows { display:flex; flex-direction:column; gap:3px; }
+.pd-rows.collapsed { display:none; }
+
+.pd-row {
+  display:flex; align-items:center; justify-content:space-between; gap:6px;
+}
+.pd-label {
+  font-size:.6rem; color:var(--ui-dim); font-family:'Noto Sans Mono',monospace;
+  flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.pd-input {
+  width:58px; padding:2px 4px;
+  background:rgba(255,255,255,.04); border:1px solid var(--ui-border);
+  border-radius:2px; color:var(--wood-light);
+  font-family:'Noto Sans Mono',monospace; font-size:.65rem;
+  text-align:right;
+}
+.pd-input:focus { outline:none; border-color:var(--wood); }
+.pd-input.changed { border-color:var(--green); color:var(--green); }
+
+#pd-phase-info {
+  font-family:'Noto Sans Mono',monospace; font-size:.58rem; color:var(--ui-dim);
+  margin-bottom:6px; line-height:1.7;
+}
+#pd-phase-badge {
+  display:inline-block; padding:1px 6px; border-radius:2px; margin-left:4px;
+  font-size:.55rem; background:rgba(39,174,96,.15); color:var(--green);
+  border:1px solid rgba(39,174,96,.3);
+}
+.pd-reset-row { margin-top:8px; display:flex; gap:6px; }
+.pd-reset-btn {
+  flex:1; padding:5px 4px; font-size:.6rem; font-family:'Noto Sans Mono',monospace;
+  background:transparent; color:var(--ui-dim); border:1px solid var(--ui-border);
+  border-radius:2px; cursor:pointer; letter-spacing:.05em;
+}
+.pd-reset-btn:hover { border-color:var(--red); color:var(--red); }
+.pd-export-btn {
+  flex:1; padding:5px 4px; font-size:.6rem; font-family:'Noto Sans Mono',monospace;
+  background:transparent; color:var(--ui-dim); border:1px solid var(--ui-border);
+  border-radius:2px; cursor:pointer; letter-spacing:.05em;
+}
+.pd-export-btn:hover { border-color:var(--wood); color:var(--wood-light); }
+.pn-stat { display:flex; justify-content:space-between; align-items:center; margin-bottom:3px; }
+.pn-key { font-size:.55rem; color:var(--ui-dim); font-family:'Noto Sans Mono',monospace; }
+.pn-val { font-size:.62rem; color:var(--wood-light); font-family:'Noto Sans Mono',monospace; font-weight:600; }
+.pn-bar-track { height:5px; background:rgba(255,255,255,.05); border-radius:3px; margin:6px 0 10px; }
+.pn-bar-fill { height:100%; background:linear-gradient(90deg,var(--green),#8fbc5a); border-radius:3px; width:0%; transition:width .6s; }
+.pd-crd-table { width:100%; border-collapse:collapse; margin-top:4px; }
+.pd-crd-table th {
+  font-size:.5rem; color:var(--ui-dim); letter-spacing:.12em; text-align:center;
+  padding:2px 0; border-bottom:1px solid var(--ui-border); font-weight:normal;
+}
+.pd-crd-table td { padding:2px 2px; vertical-align:middle; }
+.pd-crd-label {
+  font-size:.58rem; color:var(--ui-dim); font-family:'Noto Sans Mono',monospace;
+  white-space:nowrap;
+}
+.pd-crd-label.crisis { color:var(--red); }
+.pd-crd-input {
+  width:38px; padding:2px 3px;
+  background:rgba(255,255,255,.04); border:1px solid var(--ui-border);
+  border-radius:2px; color:var(--wood-light);
+  font-family:'Noto Sans Mono',monospace; font-size:.62rem;
+  text-align:center;
+}
+.pd-crd-input:focus { outline:none; border-color:var(--wood); }
+.pd-crd-input.changed { border-color:var(--green); color:var(--green); }
+.pd-crd-input.crisis-input { border-color:rgba(192,57,43,.4); color:#e07060; }
+.pd-crd-scale { font-size:.48rem; color:#5a5040; font-family:'Noto Sans Mono',monospace; }
+
+.pd-preset-row { display:flex; gap:4px; margin-bottom:8px; flex-wrap:wrap; }
+.pd-preset-btn {
+  flex:1; min-width:60px; padding:4px 3px; font-size:.55rem;
+  font-family:'Noto Sans Mono',monospace; background:transparent;
+  color:var(--ui-dim); border:1px solid var(--ui-border);
+  border-radius:2px; cursor:pointer; letter-spacing:.04em; text-align:center;
+}
+.pd-preset-btn:hover { border-color:var(--wood); color:var(--wood-light); }
+.pd-preset-btn.active { border-color:var(--green); color:var(--green); background:rgba(39,174,96,.08); }
+
+
+.pd-haupthebel .pd-label { color: var(--wood-light); font-weight:600; }
+.pd-haupthebel .pd-input { border-color: rgba(200,160,90,.5); }
+.pd-haupthebel .pd-input:focus { border-color: var(--wood-light); }
+.pd-warn .pd-label { color: #7a6a5a; font-style:italic; }
+.pd-warn .pd-input { opacity:.7; }
+.pd-tip-btn {
+  flex-shrink:0; width:14px; height:14px; border-radius:50%;
+  border:1px solid var(--ui-border); background:transparent;
+  color:var(--ui-dim); font-size:.5rem; cursor:pointer; line-height:14px;
+  text-align:center; padding:0; font-family:'Noto Sans Mono',monospace;
+  display:flex; align-items:center; justify-content:center;
+}
+.pd-tip-btn:hover { border-color:var(--wood); color:var(--wood-light); }
+.pd-tip-btn.active { border-color:var(--green); color:var(--green); }
+.pd-tip-text {
+  display:none; font-size:.55rem; color:#8a9070;
+  font-family:'Noto Sans Mono',monospace; line-height:1.6;
+  padding:3px 6px 3px 0; margin-bottom:2px;
+}
+.pd-tip-text.show { display:block; }
+.pd-sec-hint {
+  font-size:.55rem; color:#7a8060; font-family:'Noto Sans Mono',monospace;
+  line-height:1.6; padding:4px 0 6px; border-bottom:1px dashed var(--ui-border);
+  margin-bottom:6px; display:none;
+}
+.pd-sec-hint.show { display:block; }
+.pd-hint-toggle {
+  font-size:.5rem; color:var(--ui-dim); background:transparent;
+  border:none; cursor:pointer; padding:0 2px; font-family:'Noto Sans Mono',monospace;
+}
+.pd-hint-toggle:hover { color:var(--wood-light); }
+</style>
+
+<script>
+(function buildDashboard() {
+  const SECTIONS = [
+    {
+      id:'phase', label:'⌚ Phasen-Grenzen',
+      hint:'Soft-Gating: Experten überblenden per smoothstep über ±Blend-Breite Züge. In der Übergangszone laufen zwei Experten gewichtet gemischt. Crisis: score = (1−wCrisis)·sPhase + wCrisis·sCrisis.',
+      params:[
+        {key:'phaseBlendWidth', label:'Blend-Breite ±Züge', step:1, min:0, max:30, main:true,
+         tip:'⭐ NEU: weiche Experten-Übergänge. 0 = harte Umschaltung (altes Verhalten). Badge zeigt Live-Mix.'},
+        {key:'openingMoves',    label:'Eröffnung ≤ Zug',   step:1,   min:5,   max:60,
+         tip:'↑ = längere territoriale Eröffnungsphase'},
+        {key:'endgameMoves',    label:'Endspiel ≥ Zug',    step:1,   min:20,  max:200,
+         tip:'↓ = früher Gebiets-Denken (Area-Scoring)'},
+        {key:'endgameEmpty',    label:'Endspiel ≤ Frei',   step:1,   min:10,  max:150,
+         tip:'↓ = schaltet noch früher in Endspiel-Modus'},
+      ]
+    },
+    {
+      id:'open', label:'🌅 Eröffnung',
+      hint:'Geometrische Heuristik statt Joseki-DB. Shimari und Approach-Moves entstehen von selbst durch Boni.',
+      params:[
+        {key:'openEdge3',       label:'3. Linie Bonus',    step:5,   min:0,   max:200,
+         tip:'3./4. Linie sind stark — ↑ = mehr Randnähe in Eröffnung'},
+        {key:'openEdge5',       label:'5. Linie Bonus',    step:5,   min:0,   max:200,
+         tip:'Mittlere Randzone — ↑ = breiteres Eröffnungsspiel'},
+        {key:'openCenter',      label:'Zentrum Bonus',     step:1,   min:0,   max:50,
+         tip:'↑ = mehr Zentrumsplay in den ersten Zügen'},
+        {key:'openHoshiBonus',  label:'Hoshi Bonus',       step:5,   min:0,   max:100,
+         tip:'Star-Point Bonus (aktiv bei mc<15). ↑ = klassischere Eröffnung'},
+        {key:'openCornerBonus', label:'Ecke Bonus',        step:5,   min:0,   max:100,
+         tip:'Eck-Annäherungen auf 3-4 Punkt belohnen'},
+        {key:'openCapBonus',    label:'Schlag Bonus',      step:50,  min:0,   max:2000,
+         tip:'↑ = aggressiver in der Eröffnung'},
+      ]
+    },
+    {
+      id:'mid', label:'⚔️ Mittelspiel',
+      hint:'Kampf-Experte. Balance zwischen Angriff (Captures, Atari-Druck) und Stärke (Freiheiten, Struktur).',
+      params:[
+        {key:'midCapBonus',      label:'Schlag Bonus',     step:50,  min:0,   max:3000,
+         tip:'↑ = gieriger nach Captures; ↓ = strukturierter'},
+        {key:'midLibBonus',      label:'Freiheit Bonus',   step:5,   min:0,   max:200,
+         tip:'↑ = vorsichtiger, mehr Wert auf Gruppenlebendigkeit'},
+        {key:'midAtariPenalty',  label:'Selbst-Atari ✗',  step:50,  min:0,   max:2000,
+         tip:'Selbst-Atari-Schutz. Nicht zu niedrig — sonst Suizide.',  warn:true},
+        {key:'midRescueAtari',   label:'Retten Atari',     step:50,  min:0,   max:2000,
+         tip:'↑ = defensiver; eigene Atari-Gruppen zuverlässiger retten'},
+        {key:'midOppAtari',      label:'Gegner Atari',     step:50,  min:0,   max:2000,
+         tip:'↑ = aggressiver; mehr Atari-Druck auf Gegner'},
+        {key:'midOpp2Lib',       label:'Gegner 2-Lib',     step:20,  min:0,   max:500,
+         tip:'↑ = frühzeitig einengen; ↓ = mehr globale Strategie'},
+        {key:'midOppAtariNear',  label:'Feind Atari nah',  step:20,  min:0,   max:500,
+         tip:'Bonus wenn Gegner-Gruppe nach eigenem Zug in Atari ist'},
+        {key:'midSafeBonus',     label:'Sicherer Leerpl.', step:5,   min:0,   max:100,
+         tip:'↑ = mehr Wert auf sichere Einfluss-Felder'},
+      ]
+    },
+    {
+      id:'end', label:'🏁 Endspiel',
+      hint:'Score = tatsächliche Gebiets-Veränderung. Neutraler Zug ≈ 0 → KI passt. endCapBonus niedrig halten — tote Steine werden beim Scoring automatisch entfernt, die KI muss sie nicht selbst schlagen.',
+      params:[
+        {key:'endAreaGain',     label:'Gebiet / Punkt',    step:5,   min:0,   max:200,  main:true,
+         tip:'⭐ HAUPTHEBEL. 1 Pkt Gebiet = +30 Score. ↑ = kämpft länger; ↓ = passt früher'},
+        {key:'endCapBonus',     label:'Schlag Bonus',      step:10,  min:0,   max:500,
+         tip:'Klein halten! Tote Steine werden beim Scoring automatisch entfernt. ↑ = KI schlägt sie lieber selbst → Spiel dauert viel länger'},
+        {key:'endAtariPenalty', label:'Selbst-Atari ✗',   step:50,  min:0,   max:2000,
+         tip:'Sicherheitsstrafe. Nicht ändern.',  warn:true},
+        {key:'endOppAtari',     label:'Gegner Atari',      step:10,  min:0,   max:500,
+         tip:'↑ = mehr Sente-Spiel und Druck im Endspiel'},
+      ]
+    },
+    {
+      id:'tsumego', label:'🧩 Tsumego',
+      hint:'Safety-Multiplikator (×safetyMul) schützt vor Suizid nach Self-Atari. Nakade-Bonus gedämpft (halbe Stärke).',
+      params:[
+        {key:'tsumegoCapBonus',   label:'Schlag Bonus',     step:100, min:0,   max:5000,
+         tip:'↑ = gieriger nach Captures in Lebens/Tod-Situationen'},
+        {key:'tsumegoAtariSet',   label:'Atari setzen',     step:50,  min:0,   max:3000,
+         tip:'↑ = mehr Druck-Spiel und Verfolgung'},
+        {key:'tsumegoRescue3',    label:'Retten → 3+Lib',   step:50,  min:0,   max:3000,
+         tip:'↑ = defensiver; zuverlässigere Rettung aus Atari'},
+        {key:'tsumegoRescue2',    label:'Retten → 2Lib',    step:50,  min:0,   max:2000,
+         tip:'Rettung in stabilere 2-Lib-Position'},
+        {key:'tsumegoLibBonus',   label:'Freiheit Bonus',   step:5,   min:0,   max:200,
+         tip:'↑ = mehr Wert auf Freiheiten im Tsumego'},
+        {key:'tsumegoNakade',     label:'Nakade Skala',     step:0.05,min:0,   max:2,    float:true,
+         tip:'↑ = riskantere Tötungsversuche. Nicht über 1.0 ohne Shape-Erkennung.'},
+        {key:'tsumegoSafetyMul',  label:'Safety-Mul ×',     step:0.05,min:0,   max:1,    float:true,
+         tip:'Self-Atari-Dämpfer. Nicht über 0.5 — sonst Suizide möglich.',  warn:true},
+        {key:'tsumegoWeaken',     label:'Schwächen ✗',      step:50,  min:0,   max:1000,
+         tip:'Strafe fürs Schwächen eigener Nachbargruppen. Sicherheit.',  warn:true},
+      ]
+    },
+    {
+      id:'crisis', label:'🚨 Krisen-Karte',
+      hint:'Wenn KI zu aggressiv: Größenschwellen hochsetzen. Wenn KI Kämpfe verschläft: Schwellen runter oder Gewichte hoch.',
+      params:[
+        {key:'crisisAtari',      label:'Atari Gewicht',     step:5,   min:0,   max:200,
+         tip:'Atari = immer kritisch (100). Nicht ändern.',  warn:true},
+        {key:'crisisLarge2Lib',  label:'Groß-Gruppe 2Lib',  step:5,   min:0,   max:200,
+         tip:'↓ = weniger Trigger bei 2-Lib-Gruppen (ruhiger); ↑ = aggressiver'},
+        {key:'crisisDragon3Lib', label:'Drachen 3Lib',      step:5,   min:0,   max:200,
+         tip:'↑ = mehr Crisis-Trigger bei großen Gruppen mit 3 Lib'},
+        {key:'crisisLargeSize',  label:'Min.größe 2Lib',    step:1,   min:1,   max:20,
+         tip:'↓ = auch kleine Gruppen triggern Crisis (aggressiver)'},
+        {key:'crisisDragonSize', label:'Min.größe Drache',  step:1,   min:1,   max:30,
+         tip:'↓ = mehr Kämpfe um mittlere Gruppen'},
+      ]
+    },
+    {
+      id:'search', label:'🔮 Suche & Pass',
+      hint:'Wenn KI zu früh passt: passGainThreshold runter (z.B. 40). Zu lange: hoch (z.B. 100). Zeit runter bei Ruckeln.',
+      params:[
+        {key:'passGainThreshold', label:'Pass-Schwelle',    step:5,   min:0,   max:300,  main:true,
+         tip:'⭐ HAUPTHEBEL. ↑ = passt großzügiger. ↓ = paranoider / spielt länger'},
+        {key:'passMinMc40',       label:'Pass mc>40',       step:5,   min:-200,max:100,
+         tip:'Früh-Pass: wenn best < X → Pass-Kandidat'},
+        {key:'passMinMc80',       label:'Pass mc>80',       step:5,   min:-100,max:100,
+         tip:'Mittelspiel-Pass-Schwelle'},
+        {key:'aiTimeBudget',      label:'Zeit-Budget ms',   step:100, min:100, max:5000, main:true,
+         tip:'⭐ HAUPTHEBEL. ↓ 1200 bei Ruckeln auf Smartphone. ↑ 2500 auf PC.'},
+        {key:'rolloutSample',     label:'Rollout-Sample',   step:8,   min:0,   max:200,
+         tip:'Stichprobe legaler Züge pro Rollout-Ply. ↓ = mehr Sims (schneller), 0 = alle Züge prüfen (alt, langsam)'},
+        {key:'rolloutWeight',     label:'Rollout-Anteil',   step:0.05,min:0,   max:1,    float:true,
+         tip:'Hard-KI Blend. Ändert scoreWeight automatisch mit.'},
+        {key:'scoreWeight',       label:'Heuristik-Anteil', step:0.05,min:0,   max:1,    float:true,
+         tip:'= 1 − rolloutWeight (wird auto-synchronisiert)'},
+      ]
+    },
+    {
+      id:'mcts', label:'🌲 MCTS-Suche (Schwer)',
+      hint:'PUCT-Baumsuche statt flacher Kandidaten-Liste: vielversprechende Varianten werden tiefer verfolgt, schlechte früh aufgegeben. useMCTS=0 → alter Ansatz, direkt vergleichbar (A/B). Zugprotokoll zeigt Sims + Besuchsanteil + Q pro Zug.',
+      params:[
+        {key:'useMCTS',          label:'MCTS an (1/0)',    step:1,   min:0,   max:1,   main:true,
+         tip:'⭐ 1 = PUCT-Baumsuche, 0 = Kandidaten+Rollouts (alt). Für A/B einfach umschalten.'},
+        {key:'puctC',            label:'Exploration c',    step:0.1, min:0.2, max:4,   float:true,
+         tip:'↑ = breiter suchen (mehr Exploration), ↓ = tiefer in die beste Variante'},
+        {key:'mctsRootChildren', label:'Wurzel-Kinder',    step:1,   min:4,   max:40,
+         tip:'Kandidaten an der Wurzel — Priors aus MoE-Eval + PolicyNet'},
+        {key:'mctsChildren',     label:'Knoten-Kinder',    step:1,   min:2,   max:20,
+         tip:'Kandidaten pro innerem Knoten — Priors aus quickEval (rang-basiert)'},
+        {key:'mctsRolloutDepth', label:'Rollout-Tiefe',    step:2,   min:4,   max:80,
+         tip:'Züge pro Blatt-Simulation. ↓ = mehr Sims, aber verrauschtere Werte'},
+        {key:'mctsValueScale',   label:'Wert-Skala',       step:50,  min:50,  max:2000,
+         tip:'tanh-Skalierung von evaluateBoard → [−1,1]. ↓ = Werte sättigen schneller'},
+      ]
+    },
+    {
+      id:'compute', label:'🔍 Compute-Budget',
+      hint:'Nur relevant bei useMCTS=0 (alter Such-Ansatz). CAND = Breite, R = Rollouts pro Kandidat, D = Simulationstiefe. Crisis-Override: bei Atari auf dem Brett schlägt diese Zeile alle anderen.',
+      hintOpen: true,
+      custom:'crd'
+    },
+    {
+      id:'polnet', label:'🧠 Policy-Netz',
+      hint:'3971→128→361 Netz, REINFORCE. Score = (1−blend)·MoE + blend·Prior·scale. Blend wächst automatisch: nach 5 Spielen ~30% Einfluss. Gewichte in localStorage.',
+      custom:'pnet'
+    },
+  ];
+
+  const sidebar = document.querySelector('.sidebar');
+  const panel = document.createElement('div');
+  panel.className = 'panel'; panel.id = 'pdash';
+
+  let html = `
+    <div class="panel-title" onclick="dashToggle()">
+      <span>⚙ Parameter</span><span id="pdash-arrow">▸</span>
+    </div>
+    <div id="pdash-body">
+
+      <div style="font-size:.55rem;color:var(--ui-dim);letter-spacing:.12em;margin-bottom:4px">SPIELSTIL</div>
+      <div class="pd-preset-row" id="pd-preset-row">
+        <button class="pd-preset-btn" id="pd-preset-ausgeglichen" onclick="dashApplyPreset('ausgeglichen')">⚖ Ausgewogen</button>
+        <button class="pd-preset-btn" id="pd-preset-aggressiv" onclick="dashApplyPreset('aggressiv')">⚔ Aggressiv</button>
+        <button class="pd-preset-btn" id="pd-preset-defensiv" onclick="dashApplyPreset('defensiv')">🛡 Defensiv</button>
+        <button class="pd-preset-btn" id="pd-preset-standard" onclick="dashApplyPreset('standard')">↺ Std</button>
+      </div>
+      <div id="pd-phase-info">Phase: <span id="pd-phase-badge">Eröffnung</span></div>`;
+
+  const CRD_ROWS = [
+    {id:'open',   label:'🌅 Eröffnung', cand:'candOpen',  roll:'rollOpen',  depth:'depthOpen',  scale:''},
+    {id:'mid',    label:'⚔️ Mittel',    cand:'candMid',   roll:'rollMid',   depth:'depthMid',   scale:'×f', capRow:[
+      {k:'candMidMax',label:'↑Cap',tip:'Kandidaten-Cap'},{k:'rollMidMin',label:'↓Min',tip:'Rollout-Minimum'},{k:'depthMidMax',label:'↑Cap',tip:'Tiefen-Cap'}
+    ]},
+    {id:'end',    label:'🏁 Endspiel',  cand:'candEnd',   roll:'rollEnd',   depth:'depthEnd',   scale:'×f', capRow:[
+      {k:'',label:''},{k:'rollEndMin',label:'↓Min',tip:'Rollout-Minimum'},{k:'depthEndMax',label:'↑Cap',tip:'Tiefen-Cap'}
+    ]},
+    {id:'crisis', label:'⚡ Crisis',    cand:'crisisCand',roll:'crisisRoll',depth:'crisisDepth', scale:'',  crisis:true},
+  ];
+
+  for (const sec of SECTIONS) {
+    const hintId = 'pdhint-' + sec.id;
+    html += `
+      <div class="pd-section">
+        <div class="pd-sec-title" onclick="dashSecToggle('${sec.id}')">
+          <span>${sec.label}</span>
+          <span style="display:flex;align-items:center;gap:4px">
+            ${sec.hint ? `<button class="pd-hint-toggle" onclick="event.stopPropagation();dashHintToggle('${hintId}')" title="Hinweis">ℹ</button>` : ''}
+            <span class="pd-sec-arrow" id="pdarr-${sec.id}">▸</span>
+          </span>
+        </div>
+        ${sec.hint ? `<div class="pd-sec-hint${sec.hintOpen ? ' show' : ''}" id="${hintId}">${sec.hint}</div>` : ''}
+        <div class="pd-rows collapsed" id="pdsec-${sec.id}">`;
+
+    if (sec.custom === 'pnet') {
+      html += `
+        <div class="pn-stat"><span class="pn-key">Spiele</span><span class="pn-val" id="pn-games">0</span></div>
+        <div class="pn-stat"><span class="pn-key">Siege</span><span class="pn-val" id="pn-wins">0</span></div>
+        <div class="pn-stat"><span class="pn-key">Netz-Einfluss</span><span class="pn-val" id="pn-blend">0%</span></div>
+        <div class="pn-stat"><span class="pn-key">Letztes Spiel</span><span class="pn-val" id="pn-result">—</span></div>
+        <div class="pn-bar-track"><div class="pn-bar-fill" id="pn-warmup-bar"></div></div>
+        <div class="pd-row"><span class="pd-label">Max. Einfluss</span>
+          <input class="pd-input" type="number" id="pd-netMaxBlend" min="0" max="1" step="0.05" value="${PARAMS.netMaxBlend}"
+            onchange="dashUpdate('netMaxBlend',this,true)" oninput="dashUpdate('netMaxBlend',this,true)"></div>
+        <div class="pd-row"><span class="pd-label">Warmup Spiele</span>
+          <input class="pd-input" type="number" id="pd-netWarmup" min="1" max="100" step="1" value="${PARAMS.netWarmup}"
+            onchange="dashUpdate('netWarmup',this,false)" oninput="dashUpdate('netWarmup',this,false)"></div>
+        <div class="pd-row"><span class="pd-label">Lernrate</span>
+          <input class="pd-input" type="number" id="pd-netLR" min="0.0001" max="0.05" step="0.0005" value="${PARAMS.netLR}"
+            onchange="dashUpdate('netLR',this,true)" oninput="dashUpdate('netLR',this,true)"></div>
+        <div class="pd-row"><span class="pd-label">Score-Skalierung</span>
+          <input class="pd-input" type="number" id="pd-netScoreScale" min="500" max="50000" step="500" value="${PARAMS.netScoreScale}"
+            onchange="dashUpdate('netScoreScale',this,false)" oninput="dashUpdate('netScoreScale',this,false)"></div>
+        <div style="margin-top:8px">
+          <button class="pd-reset-btn" style="width:100%" onclick="policyNet.reset();dashRefreshPhase()">🗑 Netz zurücksetzen</button>
+        </div>`;
+    } else if (sec.custom === 'crd') {
+      html += `<table class="pd-crd-table">
+        <tr><th></th>
+          <th title="Kandidaten-Breite: wie viele der besten Züge überhaupt geprüft werden">CAND</th>
+          <th title="Rollouts: wie oft jeder Kandidat simuliert (durchgespielt) wird">R</th>
+          <th title="Tiefe: wie viele Züge jede Simulation vorausrechnet">D</th>
+        </tr>`;
+      for (const row of CRD_ROWS) {
+        const lc = row.crisis ? 'pd-crd-label crisis' : 'pd-crd-label';
+        const ic = row.crisis ? 'pd-crd-input crisis-input' : 'pd-crd-input';
+        html += `<tr>
+          <td><span class="${lc}">${row.label} <span class="pd-crd-scale">${row.scale}</span></span></td>
+          <td><input class="${ic}" type="number" id="pd-${row.cand}" min="1" max="30" step="1" value="${PARAMS[row.cand]}" onchange="dashCrdUpdate('${row.cand}',this)" oninput="dashCrdUpdate('${row.cand}',this)"></td>
+          <td><input class="${ic}" type="number" id="pd-${row.roll}" min="1" max="20" step="1" value="${PARAMS[row.roll]}" onchange="dashCrdUpdate('${row.roll}',this)" oninput="dashCrdUpdate('${row.roll}',this)"></td>
+          <td><input class="${ic}" type="number" id="pd-${row.depth}" min="2" max="100" step="2" value="${PARAMS[row.depth]}" onchange="dashCrdUpdate('${row.depth}',this)" oninput="dashCrdUpdate('${row.depth}',this)"></td>
+        </tr>`;
+        if (row.capRow) {
+          html += `<tr style="opacity:.65"><td></td>`;
+          for (const cap of row.capRow) {
+            if (!cap.k) { html += `<td></td>`; continue; }
+            html += `<td><input class="pd-crd-input" type="number" id="pd-${cap.k}" min="1" max="100" step="1" value="${PARAMS[cap.k]}" title="${cap.tip}" onchange="dashCrdUpdate('${cap.k}',this)" oninput="dashCrdUpdate('${cap.k}',this)"></td>`;
+          }
+          html += `</tr>`;
+        }
+      }
+      html += `</table>`;
+    } else {
+      for (const p of sec.params) {
+        const cls = p.main ? 'pd-row pd-haupthebel' : p.warn ? 'pd-row pd-warn' : 'pd-row';
+        const tipId = 'pdtip-' + p.key;
+        html += `
+          <div class="${cls}">
+            <span class="pd-label">${p.label}</span>
+            ${p.tip ? `<button class="pd-tip-btn" onclick="dashTipToggle('${tipId}', this)" title="${p.tip}">?</button>` : ''}
+            <input class="pd-input" type="number" id="pd-${p.key}"
+              step="${p.step}" min="${p.min}" max="${p.max}"
+              value="${PARAMS[p.key]}"
+              onchange="dashUpdate('${p.key}', this, ${!!p.float})"
+              oninput="dashUpdate('${p.key}', this, ${!!p.float})">
+          </div>
+          ${p.tip ? `<div class="pd-tip-text" id="${tipId}">${p.tip}</div>` : ''}`;
+      }
+    }
+    html += `</div></div>`;
+  }
+
+  html += `
+      <div class="pd-reset-row">
+        <button class="pd-reset-btn" onclick="dashReset()">↺ Reset</button>
+        <button class="pd-export-btn" onclick="dashExport()">⬇ Export</button>
+      </div>
+    </div>`;
+
+  panel.innerHTML = html;
+  sidebar.appendChild(panel);
+
+  const PRESETS = {
+    ausgeglichen: {
+      label: '⚖ Ausgewogen',
+      desc: 'Weniger aggressiv. Kürzeres Endspiel.',
+      values: {
+        crisisLargeSize:    6,
+        crisisDragonSize:  12,
+        midCapBonus:      580,
+        midLibBonus:       48,
+        tsumegoCapBonus:  900,
+        passGainThreshold: 65,
+        endAreaGain:       26,
+        endCapBonus:       12,
+        passMinMc120:       6,
+        passMinMc150:       8,
+      }
+    },
+    aggressiv: {
+      label: '⚔ Aggressiv',
+      desc: 'Maximal. Viele Captures, Kämpfe früh.',
+      values: {
+        crisisLargeSize:   3,
+        crisisDragonSize:  6,
+        midCapBonus:     1100,
+        midLibBonus:      20,
+        tsumegoCapBonus: 1500,
+        tsumegoAtariSet:  650,
+        passGainThreshold: 90,
+        endAreaGain:      35,
+      }
+    },
+    defensiv: {
+      label: '🛡 Defensiv',
+      desc: 'Sicherheit zuerst. Eigene Gruppen retten.',
+      values: {
+        crisisLargeSize:   8,
+        crisisDragonSize: 14,
+        midCapBonus:     450,
+        midLibBonus:      60,
+        midRescueAtari:  500,
+        tsumegoCapBonus: 700,
+        tsumegoRescue3:  900,
+        passGainThreshold: 55,
+        endAreaGain:      25,
+      }
+    },
+    standard: {
+      label: '↺ Standard',
+      desc: 'Alle Werte auf Original zurücksetzen.',
+      values: null
+    }
+  };
+
+  window.dashApplyPreset = function(name) {
+    const preset = PRESETS[name];
+    if (!preset) return;
+    if (preset.values === null) {
+      dashReset();
+    } else {
+      Object.assign(PARAMS, preset.values);
+      for (const [k,v] of Object.entries(preset.values)) {
+        const inp = document.getElementById('pd-' + k);
+        if (inp) {
+          inp.value = v;
+          inp.classList.toggle('changed', Math.abs(v - PARAMS_DEFAULT[k]) > 1e-9);
+        }
+      }
+    }
+    document.querySelectorAll('.pd-preset-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById('pd-preset-' + name)?.classList.add('active');
+    dashRefreshPhase();
+  };
+
+  window.dashToggle = function() {
+    const body = document.getElementById('pdash-body');
+    const arrow = document.getElementById('pdash-arrow');
+    const open = body.classList.toggle('open');
+    arrow.textContent = open ? '▾' : '▸';
+    if (open) dashRefreshPhase();
+  };
+
+  window.dashSecToggle = function(id) {
+    const rows = document.getElementById('pdsec-' + id);
+    const arr  = document.getElementById('pdarr-' + id);
+    const c = rows.classList.toggle('collapsed');
+    arr.textContent = c ? '▸' : '▾';
+  };
+
+  window.dashCrdUpdate = function(key, input) {
+    const raw = parseInt(input.value.replace(',','.'), 10);
+    if (isNaN(raw) || raw <= 0) return;
+    PARAMS[key] = raw;
+    input.classList.toggle('changed', raw !== PARAMS_DEFAULT[key]);
+  };
+
+  window.dashTipToggle = function(tipId, btn) {
+    const el = document.getElementById(tipId);
+    if (!el) return;
+    const show = el.classList.toggle('show');
+    btn.classList.toggle('active', show);
+  };
+
+  window.dashHintToggle = function(hintId) {
+    const el = document.getElementById(hintId);
+    if (el) el.classList.toggle('show');
+  };
+
+  window.dashUpdate = function(key, input, isFloat) {
+    const valStr = input.value.replace(',', '.');
+    let raw = isFloat ? parseFloat(valStr) : parseInt(valStr, 10);
+    if (isNaN(raw)) return;
+    const mn = input.min !== '' ? parseFloat(input.min) : -Infinity;
+    const mx = input.max !== '' ? parseFloat(input.max) : Infinity;
+    raw = Math.min(mx, Math.max(mn, raw));
+    PARAMS[key] = raw;
+    const changed = Math.abs(raw - PARAMS_DEFAULT[key]) > 1e-9;
+    input.classList.toggle('changed', changed);
+    if (key === 'rolloutWeight') {
+      const clamped = Math.min(1, Math.max(0, raw));
+      PARAMS.rolloutWeight = clamped;
+      input.value = clamped;
+      PARAMS.scoreWeight = parseFloat((1 - clamped).toFixed(4));
+      const sw = document.getElementById('pd-scoreWeight');
+      if (sw) { sw.value = PARAMS.scoreWeight; sw.classList.toggle('changed', Math.abs(PARAMS.scoreWeight - PARAMS_DEFAULT.scoreWeight) > 1e-9); }
+    }
+    dashRefreshPhase();
+  };
+
+  window.dashRefreshPhase = function() {
+    const badge = document.getElementById('pd-phase-badge');
+    if (!badge || typeof state === 'undefined') return;
+    const mc = state.moveCount;
+    const empty = 361 - Array.from(state.board).filter(v=>v>0).length;
+    /* Live-Mix der Experten anzeigen (Soft-Gating) */
+    const {wOpen, wMid, wEnd} = phaseWeights(mc, empty);
+    const phase = (wEnd >= wOpen && wEnd >= wMid) ? 'Endspiel'
+                : (wOpen >= wMid) ? 'Eröffnung' : 'Mittelspiel';
+    const parts = [];
+    if (wOpen > 0.02) parts.push(`Ö ${Math.round(wOpen*100)}%`);
+    if (wMid  > 0.02) parts.push(`M ${Math.round(wMid*100)}%`);
+    if (wEnd  > 0.02) parts.push(`E ${Math.round(wEnd*100)}%`);
+    badge.textContent = (parts.length > 1 ? parts.join(' · ') : phase) + ' (Zug ' + mc + ')';
+    const col = phase==='Eröffnung'?'rgba(39,174,96,.15)':phase==='Mittelspiel'?'rgba(200,160,90,.12)':'rgba(192,57,43,.12)';
+    const brd = phase==='Eröffnung'?'rgba(39,174,96,.3)':phase==='Mittelspiel'?'rgba(200,160,90,.3)':'rgba(192,57,43,.3)';
+    const txt = phase==='Eröffnung'?'var(--green)':phase==='Mittelspiel'?'var(--wood-light)':'var(--red)';
+    badge.style.cssText=`display:inline-block;padding:1px 6px;border-radius:2px;margin-left:4px;font-size:.55rem;background:${col};color:${txt};border:1px solid ${brd}`;
+    if (window.policyNet) policyNet.dashUpdate();
+  };
+
+  window.dashReset = function() {
+    Object.assign(PARAMS, PARAMS_DEFAULT);
+    for (const key of Object.keys(PARAMS_DEFAULT)) {
+      const inp = document.getElementById('pd-' + key);
+      if (inp) { inp.value = PARAMS[key]; inp.classList.remove('changed'); }
+    }
+    for (const sec of SECTIONS)
+      if (sec.params) for (const p of sec.params) {
+        const inp = document.getElementById('pd-' + p.key);
+        if (inp) { inp.value = PARAMS[p.key]; inp.classList.remove('changed'); }
+      }
+    document.querySelectorAll('.pd-preset-btn').forEach(b=>b.classList.remove('active'));
+    dashRefreshPhase();
+  };
+
+  window.dashExport = function() {
+    const lines = [
+      '// Go KI — Parameter-Snapshot',
+      `// Stand: Zug ${typeof state!=='undefined'?state.moveCount:0}`,
+      '// Haupthebel: endAreaGain (×30), passGainThreshold, aiTimeBudget',
+      'globalThis.PARAMS = {'
+    ];
+    for (const [k,v] of Object.entries(PARAMS)) lines.push(`  ${k}: ${v},`);
+    lines.push('};');
+    const txt = lines.join('\n');
+    navigator.clipboard.writeText(txt).catch(()=>{});
+    const btn = document.querySelector('.pd-export-btn');
+    const orig = btn.textContent;
+    btn.textContent = '✓ Kopiert'; btn.style.color='var(--green)';
+    setTimeout(()=>{ btn.textContent=orig; btn.style.color=''; },1500);
+  };
+
+  const origUpdateUI = window.updateUI;
+  if (typeof origUpdateUI === 'function') {
+    window.updateUI = function(...args) { origUpdateUI(...args); dashRefreshPhase(); };
+  }
+})();
+</script>
+</body>
+</html>
