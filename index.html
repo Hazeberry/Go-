@@ -192,6 +192,26 @@ function removeDeadGroups(board, color, nearIdx) {
   return captured;
 }
 
+/* Fix #8 (GLM): Diagonal-Prüfung gegen False Eyes. Ein Punkt kann orthogonal
+   komplett von eigenen Steinen umgeben sein und trotzdem kein echtes Auge —
+   wenn der Gegner genug Diagonalen kontrolliert, sind die umgebenden Steine
+   verbindungslos und fangbar. Standard-Go-Regel: im Zentrum ist max. 1
+   gegnerische Diagonale erlaubt, am Rand/in der Ecke keine. Ohne diese
+   Prüfung markierte resolveLifeAndDeath tote Gruppen als lebendig →
+   falscher Endstand. */
+function _diagIsTrueEye(board, candIdx, color) {
+  const x = xOf(candIdx), y = yOf(candIdx);
+  const opp = color === 1 ? 2 : 1;
+  let oppDiag = 0;
+  const corners = [[x-1,y-1],[x+1,y-1],[x-1,y+1],[x+1,y+1]];
+  for (const [cx, cy] of corners) {
+    if (cx < 0 || cx >= SIZE || cy < 0 || cy >= SIZE) continue;  /* außerhalb zählt nicht als Gegner */
+    if (board[cy * SIZE + cx] === opp) oppDiag++;
+  }
+  const edge = x===0||x===SIZE-1||y===0||y===SIZE-1;
+  return oppDiag <= (edge ? 0 : 1);   /* Ecke ist Teilmenge von edge */
+}
+
 function findEyes(board, group, color) {
   const eyes = [], candidates = new Map();
   for (const g of group)
@@ -207,7 +227,8 @@ function findEyes(board, group, color) {
     const x = xOf(candIdx), y = yOf(candIdx);
     const edge = x===0||x===SIZE-1||y===0||y===SIZE-1;
     const corner = (x===0||x===SIZE-1)&&(y===0||y===SIZE-1);
-    if (isEye && own >= (corner?2:edge?3:4)) eyes.push(candIdx);
+    if (isEye && own >= (corner?2:edge?3:4) && _diagIsTrueEye(board, candIdx, color))
+      eyes.push(candIdx);
   }
   return eyes;
 }
@@ -301,7 +322,7 @@ globalThis.PARAMS = {
   mctsRootChildren:  16,
   mctsChildren:       8,
   mctsRolloutDepth:  24,
-  mctsValueScale:   400,
+  mctsValueScale:   350,
   mctsMaxDepth:      60,
   /* RAVE/AMAF + Tree-Reuse — Statistik-Hebel ohne Training */
   raveEnabled:         1,    // 0 = aus, reines PUCT wie vorher
@@ -312,17 +333,8 @@ globalThis.PARAMS = {
   netWarmup:         10,
   netLR:           0.001,
   netScoreScale:   5000,
-  /* MoE: weiches Phasen-Blending (Fenster in Zügen, 0 = hartes Schalten) */
-  phaseBlend:         8,
-  /* MCTS-PUCT (Schwer-KI). mctsEnabled 0 = alte Kandidaten×Rollout-Suche */
-  mctsEnabled:        1,
-  mctsC:            1.4,
+  /* First-Play-Urgency: Startwert für unbesuchte MCTS-Knoten (Fix #5) */
   mctsFPU:         0.45,
-  mctsMaxChildren:   20,
-  mctsRolloutDepth:  24,
-  mctsValueScale:   350,
-  mctsPriorTemp:    150,
-  mctsMaxPlayouts: 4000,
 };
 globalThis.PARAMS_DEFAULT = Object.freeze({...PARAMS});
 
@@ -355,21 +367,23 @@ function applyUndo(board, undo) {
   for (let i = undo.length - 1; i >= 0; i--) board[undo[i].idx] = undo[i].oldColor;
 }
 
-function getLegalMoves(board, color, historyHashes) {
+function getLegalMoves(board, color, historyHashes, koPoint) {
   const opp = color === 1 ? 2 : 1;
   const moves = [];
   /* PERF: Rollouts übergeben ein leeres Hash-Set — dann den teuren
      Zobrist-Scan (361 Zellen pro Kandidat!) komplett überspringen.
      Verhalten identisch, aber die Hard-KI spart Millionen Operationen. */
-  const checkKo = historyHashes && historyHashes.size > 0;
+  const checkSuperko = historyHashes && historyHashes.size > 0;
+  const hasKo = koPoint !== null && koPoint !== undefined;
   _legalScratch.set(board);
   for (let i = 0; i < BOARD_SIZE; i++) {
     if (board[i] !== 0) continue;
+    if (hasKo && i === koPoint) continue;   /* Fix 7: 1-Ply-Ko, billig */
     _legalScratch[i] = color;
     const {captured, undo} = removeDeadGroupsUndoable(_legalScratch, opp, i);
     let legal = true;
     if (captured === 0 && floodFill(_legalScratch, i).liberties.length === 0) legal = false;
-    if (legal && (!checkKo || !historyHashes.has(computeZobrist(_legalScratch))))
+    if (legal && (!checkSuperko || !historyHashes.has(computeZobrist(_legalScratch))))
       moves.push({x: xOf(i), y: yOf(i), idx: i});
     applyUndo(_legalScratch, undo);
     _legalScratch[i] = 0;
@@ -685,10 +699,14 @@ function quickEval(board, i, color) {
   return score + free*40 + oppN*20 + ownN*15 + Math.random()*5;
 }
 
+/* Fix #3: evaluateBoard läuft einmal pro MCTS-Simulation (tausende Male
+   pro Zug). Die Uint8Array-Allokation pro Aufruf erzeugte messbaren
+   GC-Druck — jetzt ein wiederverwendetes Modul-Scratchpad mit fill(0). */
+const _evalBoardSeen = new Uint8Array(BOARD_SIZE);
 function evaluateBoard(board, color, captures) {
   const opp = color === 1 ? 2 : 1;
   let s = ((captures[color]||0) - (captures[opp]||0)) * 20;
-  const seen = new Uint8Array(BOARD_SIZE);
+  const seen = _evalBoardSeen; seen.fill(0);
   for (let i = 0; i < BOARD_SIZE; i++) {
     const c = board[i]; if (!c || seen[i]) continue;
     const {group, liberties} = floodFill(board, i);
@@ -706,18 +724,20 @@ const _emptyHashes = new Set();
    Ply ~85% der Legalitätsprüfungen. Iteriert geshuffelt weiter, falls
    die ersten Kandidaten illegal sind → Pass-Erkennung bleibt korrekt.
    PARAMS.rolloutSample = 0 stellt das alte Verhalten wieder her. */
-function sampleLegalMoves(board, color, S) {
+function sampleLegalMoves(board, color, S, koPoint) {
   const empties = [];
   for (let i = 0; i < BOARD_SIZE; i++) if (board[i] === 0) empties.push(i);
   if (!empties.length) return [];
   const opp = color === 1 ? 2 : 1;
   const moves = [];
   const limit = Math.min(S, empties.length);
+  const hasKo = koPoint !== null && koPoint !== undefined;
   _legalScratch.set(board);
   for (let j = 0; j < empties.length && moves.length < limit; j++) {
     const r = j + Math.floor(Math.random() * (empties.length - j));
     const t = empties[j]; empties[j] = empties[r]; empties[r] = t;
     const i = empties[j];
+    if (hasKo && i === koPoint) continue;   /* Fix 7 */
     _legalScratch[i] = color;
     const {captured, undo} = removeDeadGroupsUndoable(_legalScratch, opp, i);
     let legal = true;
@@ -729,17 +749,18 @@ function sampleLegalMoves(board, color, S) {
   return moves;
 }
 
-function rollout(board, startColor, histHashes, captures, depth, rootColor) {
+function rollout(board, startColor, histHashes, captures, depth, rootColor, koPoint) {
   _rolloutScratch.set(board);
   const simCap = {1: captures[1]||0, 2: captures[2]||0};
   let color = startColor, passes = 0;
   const S = PARAMS.rolloutSample | 0;
+  let currentKo = koPoint;   /* Fix 7: Ko-Punkt wandert durch die Simulation */
   for (let d = 0; d < depth; d++) {
     const opp = color === 1 ? 2 : 1;
     const legal = (S > 0)
-      ? sampleLegalMoves(_rolloutScratch, color, S)
-      : getLegalMoves(_rolloutScratch, color, _emptyHashes);
-    if (!legal.length) { if (++passes >= 2) break; color = opp; continue; }
+      ? sampleLegalMoves(_rolloutScratch, color, S, currentKo)
+      : getLegalMoves(_rolloutScratch, color, _emptyHashes, currentKo);
+    if (!legal.length) { if (++passes >= 2) break; color = opp; currentKo = null; continue; }
     passes = 0;
     const scored = legal.map(m => ({m, score: quickEval(_rolloutScratch, m.idx, color)}));
     scored.sort((a,b) => b.score - a.score);
@@ -747,7 +768,16 @@ function rollout(board, startColor, histHashes, captures, depth, rootColor) {
     const top = scored.slice(0, Math.min(K, scored.length));
     const ch = top[Math.floor(Math.random() * top.length)];
     _rolloutScratch[ch.m.idx] = color;
-    simCap[color] += removeDeadGroups(_rolloutScratch, opp, ch.m.idx);
+    const cap = removeDeadGroups(_rolloutScratch, opp, ch.m.idx);
+    simCap[color] += cap;
+    /* Ko-Punkt für den nächsten Ply aktualisieren — floodFill ist billig,
+       läuft nur bei Einzelschlag (cap===1), was in Rollouts selten ist. */
+    if (cap === 1) {
+      const ff = floodFill(_rolloutScratch, ch.m.idx);
+      currentKo = (ff.group.length === 1 && ff.liberties.length === 1) ? ff.liberties[0] : null;
+    } else {
+      currentKo = null;
+    }
     color = opp;
   }
   return evaluateBoard(_rolloutScratch, rootColor, simCap);
@@ -794,7 +824,7 @@ function _tryReuseSubtree(savedBoard, aiColor, savedNode, currentBoard) {
   return null;   /* Board passt zu keinem Kind → Undo/Pass/Fremdzug → frischer Baum */
 }
 
-function mctsPUCT(board, aiColor, captures, rootScored) {
+function mctsPUCT(board, aiColor, captures, rootScored, koPoint) {
   const deadline = Date.now() + PARAMS.aiTimeBudget;
   const scale = PARAMS.mctsValueScale, c = PARAMS.puctC;
   const rave = PARAMS.raveEnabled >= 1, raveK = PARAMS.raveK;
@@ -824,7 +854,11 @@ function mctsPUCT(board, aiColor, captures, rootScored) {
       const sq = Math.sqrt(Math.max(1, node.N));
       let best = null, bs = -Infinity;
       for (const k of node.kids) {
-        const q = k.N ? k.W / k.N : 0;
+        /* Fix #5: First-Play-Urgency. Unbesuchte Knoten bekamen bisher
+           q=0 (neutral) — nach der ersten Simulation mit negativem Wert
+           wurden Geschwister nie exploriert. FPU gibt ihnen einen
+           optimistischen Startwert und erzwingt so breitere Exploration. */
+        const q = k.N ? k.W / k.N : PARAMS.mctsFPU;
         let blended = q;
         if (rave && k.amafN) {
           const beta = Math.sqrt(raveK / (3 * node.N + raveK));
@@ -840,7 +874,7 @@ function mctsPUCT(board, aiColor, captures, rootScored) {
       const firstVisit = best.N === 0;
       color = opp; node = best;
       if (firstVisit) {   /* Blatt: kurzer Rollout als Wert-Schätzung */
-        v = Math.tanh(rollout(_mctsScratch, color, null, cap, PARAMS.mctsRolloutDepth, aiColor) / scale);
+        v = Math.tanh(rollout(_mctsScratch, color, null, cap, PARAMS.mctsRolloutDepth, aiColor, koPoint) / scale);
         break;
       }
     }
@@ -887,9 +921,9 @@ function mctsPUCT(board, aiColor, captures, rootScored) {
           q: bm.N ? bm.W / bm.N : 0};
 }
 
-function getAIMove(board, aiColor, histHashes, captures, mc, diff, reqId) {
+function getAIMove(board, aiColor, histHashes, captures, mc, diff, reqId, koPoint) {
   const hs = new Set(histHashes);
-  const legal = getLegalMoves(board, aiColor, hs);
+  const legal = getLegalMoves(board, aiColor, hs, koPoint);
   if (!legal.length) return {type:'pass', requestId:reqId};
   const empty = legal.length;
   buildCrisisMap(board, aiColor);
@@ -906,7 +940,7 @@ function getAIMove(board, aiColor, histHashes, captures, mc, diff, reqId) {
     const _bw = policyNet.blendWeight;
     let _p = null, _h = null, _inp = null;
     if (typeof policyNet.forward === 'function') {
-      _inp = policyNet.boardToInput(board, aiColor, policyNet._lastMove || null);
+      _inp = policyNet.boardToInput(board, aiColor, policyNet._lastMove || null, koPoint);
       const _r = policyNet.forward(_inp);
       _p = _r.probs; _h = _r.hidden;
     } else {
@@ -962,7 +996,7 @@ function getAIMove(board, aiColor, histHashes, captures, mc, diff, reqId) {
   } else {
     /* ── Schwer: MCTS-PUCT (neu) oder Kandidaten+Rollouts (alt, useMCTS=0) ── */
     if (PARAMS.useMCTS >= 1) {
-      const r = mctsPUCT(board, aiColor, captures, scored);
+      const r = mctsPUCT(board, aiColor, captures, scored, koPoint);
       if (r) return {type:'stone', x:r.m.x, y:r.m.y, requestId:reqId,
         info:`MCTS ${r.sims} Sims · ${r.share}% ${coordToLabel(r.m.x,r.m.y)} · Q ${r.q.toFixed(2)}`};
       return {type:'pass', requestId:reqId};
@@ -997,7 +1031,7 @@ function getAIMove(board, aiColor, histHashes, captures, mc, diff, reqId) {
       const {captured:cn, undo} = removeDeadGroupsUndoable(_simScratch, opp, m.idx);
       const sc = {1:captures[1], 2:captures[2]}; sc[aiColor] += cn;
       let tot = 0;
-      for (let r = 0; r < R; r++) tot += rollout(_simScratch, opp, histHashes, sc, D, aiColor);
+      for (let r = 0; r < R; r++) tot += rollout(_simScratch, opp, histHashes, sc, D, aiColor, koPoint);
       const comb = (tot/R) * PARAMS.rolloutWeight + score * PARAMS.scoreWeight;
       if (comb > bs) { bs = comb; bm = m; }
       applyUndo(_simScratch, undo);
@@ -1020,6 +1054,7 @@ const state = {
   boardHistory: new Set([computeZobrist(createBoard())]),
   currentHash: computeZobrist(createBoard()),
   consecutivePasses: 0, moveCount: 0, gameOver: false, log: [], lastMove: null,
+  koPoint: null,                          // Fix 7: 1-Ply-Ko-Punkt (Index oder null)
   aiEnabled: false, aiColor: 2, aiDifficulty: 'easy',
   aiThinking: false, aiRequestId: 0, aiWorker: null, aiWorkerCtx: null, deadStones: new Set(), undoStack: []
 };
@@ -1035,7 +1070,8 @@ function saveUndoState() {
     captures: {...state.captures}, currentHash: state.currentHash,
     consecutivePasses: state.consecutivePasses, moveCount: state.moveCount,
     gameOver: state.gameOver, logLength: state.log.length,
-    deadStones: new Set(state.deadStones), lastMove: state.lastMove
+    deadStones: new Set(state.deadStones), lastMove: state.lastMove,
+    koPoint: state.koPoint                  // Fix 7
   });
   if (state.undoStack.length > 50) state.undoStack.shift();
   updateUndoButton();
@@ -1049,6 +1085,7 @@ function undo() {
   state.consecutivePasses = prev.consecutivePasses; state.moveCount = prev.moveCount;
   state.gameOver = prev.gameOver; state.deadStones = prev.deadStones;
   state.lastMove = prev.lastMove; pendingTouch = null;
+  state.koPoint = prev.koPoint;            // Fix 7
   state.log.splice(prev.logLength);
   state.boardHistory = new Set([computeZobrist(createBoard())]);
   for (const entry of state.undoStack) state.boardHistory.add(entry.currentHash);
@@ -1065,6 +1102,8 @@ function placeStone(x, y) {
   if (state.gameOver) return {ok:false,reason:'Spiel beendet.'};
   const i = idx(x, y);
   if (state.board[i] !== 0) return {ok:false,reason:'Feld besetzt.'};
+  if (state.koPoint !== null && i === state.koPoint)
+    return {ok:false,reason:'Ko verboten.'};              /* Fix 7: billig, vor Zobrist */
   const opp = state.currentPlayer === 1 ? 2 : 1;
   const test = cloneBoard(state.board); test[i] = state.currentPlayer;
   const cap = removeDeadGroups(test, opp, i);
@@ -1079,6 +1118,17 @@ function placeStone(x, y) {
   state.currentHash = newHash; state.boardHistory.add(newHash);
   state.consecutivePasses = 0; state.moveCount++;
   state.lastMove = i; pendingTouch = null;
+  /* Fix 7: Ko-Punkt setzen — genau 1 Stein geschlagen, schlagender Stein ist
+     Einzelgruppe mit 1 Freiheit → diese Freiheit ist der Ko-Punkt für den
+     Gegner. floodFill ist kostenlos, lief bei cap===0 schon für Suizid-Check,
+     bei cap>0 ein einzelner BFS auf dem bereits modifizierten Board. */
+  if (cap === 1) {
+    const ff = floodFill(test, i);
+    state.koPoint = (ff.group.length === 1 && ff.liberties.length === 1)
+      ? ff.liberties[0] : null;
+  } else {
+    state.koPoint = null;
+  }
   const sym = state.currentPlayer === 1 ? '●' : '○';
   state.log.push(`${state.moveCount}. ${sym} ${coordToLabel(x,y)}${cap ? ` (+${cap})` : ''}`);
   state.currentPlayer = opp;
@@ -1093,6 +1143,7 @@ function pass() {
   const name = state.currentPlayer === 1 ? '● Schwarz' : '○ Weiß';
   state.log.push(`${++state.moveCount}. ${name} passt`);
   state.consecutivePasses++;
+  state.koPoint = null;                   /* Fix 7: Passen bricht Ko */
   if (state.consecutivePasses >= 2) {
     state.gameOver = true; state.log.push('— Spiel beendet (2× Pass) —');
     resolveLifeAndDeath(); showFinalScore();
@@ -1111,6 +1162,7 @@ function resetGame() {
     board: eb, currentPlayer: 1, captures: {1:0,2:0},
     boardHistory: new Set([eh]), currentHash: eh,
     consecutivePasses: 0, moveCount: 0, gameOver: false, lastMove: null,
+    koPoint: null,                         // Fix 7
     log: [], aiThinking: false, deadStones: new Set(), undoStack: []
   });
   pendingTouch = null;
@@ -1239,7 +1291,8 @@ function buildWorkerSource() {
         const histSet = new Set(d.histHashes);
         const result = getAIMove(
           new Uint8Array(d.board), d.aiColor, histSet,
-          d.captures, d.mc, 'hard', d.reqId
+          d.captures, d.mc, 'hard', d.reqId,
+          d.koPoint ?? null                      /* Fix 7: 8. Parameter */
         );
         if (globalThis.policyNet) globalThis.policyNet._netPriors = null;
         self.postMessage({...result, reqId: d.reqId});
@@ -1269,7 +1322,8 @@ function fallbackToMainThread(reqId, netInp, netPriors, netHidden) {
     if (reqId !== state.aiRequestId) return;
     const r = getAIMove(state.board, state.aiColor,
       Array.from(state.boardHistory), {...state.captures},
-      state.moveCount, 'hard', reqId);
+      state.moveCount, 'hard', reqId,
+      state.koPoint);                        /* Fix 7 */
     applyAIResult(r, reqId, netInp, netPriors, netHidden);
   }, 10);
 }
@@ -1312,7 +1366,7 @@ function triggerAIMove() {
     /* Letzten Zug mitgeben — Feature-Layer 8 war vorher immer leer */
     const _lm = state.lastMove !== null ? {x: xOf(state.lastMove), y: yOf(state.lastMove)} : null;
     policyNet._lastMove = _lm;
-    _netInp = policyNet.boardToInput(state.board, state.aiColor, _lm);
+    _netInp = policyNet.boardToInput(state.board, state.aiColor, _lm, state.koPoint);
     const {probs, hidden} = policyNet.forward(_netInp);
     _netPriors = probs; _netHidden = hidden;
   }
@@ -1351,6 +1405,7 @@ function triggerAIMove() {
         captures: {...state.captures},
         mc:       state.moveCount,
         reqId,
+        koPoint:  state.koPoint,               /* Fix 7 */
         params:   JSON.parse(JSON.stringify(PARAMS)),
         netPriors: _netPriors ? Array.from(_netPriors) : null,
         netBlend:  _netPriors ? policyNet.blendWeight : 0
@@ -1385,7 +1440,8 @@ function triggerAIMove() {
       }
       const r = getAIMove(state.board, state.aiColor,
         Array.from(state.boardHistory), {...state.captures},
-        state.moveCount, state.aiDifficulty, reqId);
+        state.moveCount, state.aiDifficulty, reqId,
+        state.koPoint);                      /* Fix 7 */
       applyAIResult(r, reqId, null, null, null);
     }, 50);
   }
@@ -1395,6 +1451,7 @@ function findAnyLegalMove(color) {
   const opp = color === 1 ? 2 : 1;
   for (let i = 0; i < BOARD_SIZE; i++) {
     if (state.board[i] !== 0) continue;
+    if (state.koPoint !== null && i === state.koPoint) continue;   /* Fix 7 */
     const test = cloneBoard(state.board); test[i] = color;
     const cap = removeDeadGroups(test, opp, i);
     if (cap > 0 && !state.boardHistory.has(computeZobrist(test)))
@@ -1402,6 +1459,7 @@ function findAnyLegalMove(color) {
   }
   for (let i = 0; i < BOARD_SIZE; i++) {
     if (state.board[i] !== 0) continue;
+    if (state.koPoint !== null && i === state.koPoint) continue;   /* Fix 7 */
     const test = cloneBoard(state.board); test[i] = color;
     const cap = removeDeadGroups(test, opp, i);
     if (cap === 0 && floodFill(test, i).liberties.length === 0) continue;
@@ -1801,8 +1859,16 @@ class PolicyNet {
   trainGame(reward) {
     const buf = this._gameBuffer;
     if (!buf.length) { console.log('[PolicyNet] Kein Buffer — kein Training.'); return; }
+    /* Fix #6: REINFORCE mit Baseline. Roher Reward (±1) verstärkt bei
+       einer 90%-Winrate fast nur noch "mehr vom Gleichen" — die Baseline
+       (erwarteter Reward aus der bisherigen Winrate) zentriert das Signal:
+       ein Sieg bei 90% Winrate ist wenig Information (advantage ~0.2),
+       eine Niederlage dagegen viel (advantage ~-1.8). Winrate ist schon
+       persistiert, also kein neues Speicherfeld nötig. */
+    const baseline = this.gamesPlayed > 0 ? (2 * this.wins / this.gamesPlayed - 1) : 0;
+    const advantage = reward - baseline;
     for (const {inp, probs, hidden, moveIdx} of buf) {
-      this._backward(inp, hidden, probs, moveIdx, reward);
+      this._backward(inp, hidden, probs, moveIdx, advantage);
     }
     this.gamesPlayed++;
     if (reward > 0) this.wins++;
@@ -2411,13 +2477,21 @@ globalThis.policyNet = new PolicyNet();
     PARAMS[key] = raw;
     const changed = Math.abs(raw - PARAMS_DEFAULT[key]) > 1e-9;
     input.classList.toggle('changed', changed);
-    if (key === 'rolloutWeight') {
+    if (key === 'rolloutWeight' || key === 'scoreWeight') {
+      /* Bidirektionaler Sync: egal welcher der beiden geändert wird,
+         der jeweils andere folgt, sodass die Summe immer 1 bleibt.
+         Vorher lief der Sync nur rollout→score; eine Änderung an
+         scoreWeight ließ die Summe unbemerkt von 1 abweichen. */
       const clamped = Math.min(1, Math.max(0, raw));
-      PARAMS.rolloutWeight = clamped;
+      const other = key === 'rolloutWeight' ? 'scoreWeight' : 'rolloutWeight';
+      PARAMS[key] = clamped;
       input.value = clamped;
-      PARAMS.scoreWeight = parseFloat((1 - clamped).toFixed(4));
-      const sw = document.getElementById('pd-scoreWeight');
-      if (sw) { sw.value = PARAMS.scoreWeight; sw.classList.toggle('changed', Math.abs(PARAMS.scoreWeight - PARAMS_DEFAULT.scoreWeight) > 1e-9); }
+      PARAMS[other] = parseFloat((1 - clamped).toFixed(4));
+      const otherInput = document.getElementById('pd-' + other);
+      if (otherInput) {
+        otherInput.value = PARAMS[other];
+        otherInput.classList.toggle('changed', Math.abs(PARAMS[other] - PARAMS_DEFAULT[other]) > 1e-9);
+      }
     }
     dashRefreshPhase();
   };
