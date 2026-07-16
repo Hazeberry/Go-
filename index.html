@@ -342,23 +342,46 @@ globalThis.PARAMS = {
      Muster: linearer Anstieg ab adaptiveBudgetRefEmpty freien Feldern bis
      max. adaptiveBudgetMaxFactor bei komplett vollem Brett. */
   adaptiveBudgetEnabled:    1,
-  adaptiveBudgetRefEmpty: 150,    // ab hier beginnt die Zeitverlängerung
+  adaptiveBudgetRefEmpty: 150,    // ab hier beginnt die Zeitverlängerung (Fallback, s.u.)
   adaptiveBudgetMaxFactor: 2.5,   // Obergrenze bei leerem Feld-Vorrat (0 frei)
+  /* Feedback-Korrektur: freie-Felder-Schätzung traf in einer echten Partie
+     mit viel Rand-/Eck-Gefecht nicht zu — bei 229 freien Feldern waren die
+     Sims schon auf 44 eingebrochen, weit vor der Schwelle. Komplexe
+     Gruppenstrukturen (nicht Bretfülle) treiben die floodFill-Kosten.
+     Direkte Messung der letzten Simulation korrigiert das unabhängig
+     von der Ursache — reagiert auf JEDE Verlangsamung, egal woher. */
+  adaptiveBudgetTargetMinSims: 80,   // Ziel-Mindest-Sims fürs nächste Mal
 };
 globalThis.PARAMS_DEFAULT = Object.freeze({...PARAMS});
 
-/* Stufenlose Zeitbudget-Skalierung nach freien Feldern. Läuft in worker-ai,
-   also sowohl im Worker als auch im Hauptthread aufrufbar (triggerAIMove
-   nutzt dieselbe Funktion für den Watchdog — Fix C aus Tins Review: der
-   Watchdog muss mit demselben Budget skalieren, sonst wird der Puffer im
-   Endspiel unbemerkt knapper als beabsichtigt). */
+/* Modul-Zustand: letzte gemessene ms/Sim, lebt im Worker zwischen Zügen
+   (Worker-Pool macht's möglich) — dieselbe Technik wie _mctsSavedRoot. */
+let _lastMsPerSim = null;
+
+/* Stufenlose Zeitbudget-Skalierung nach freien Feldern ALS BASIS, plus
+   Feedback-Korrektur aus der tatsächlich gemessenen letzten Simulation.
+   Läuft in worker-ai, also sowohl im Worker als auch im Hauptthread
+   aufrufbar (triggerAIMove nutzt dieselbe Funktion für den Watchdog —
+   Fix C aus Tins Review). */
 function getAdaptiveTimeBudget(emptyCount) {
   if (PARAMS.adaptiveBudgetEnabled < 1) return PARAMS.aiTimeBudget;
   const ref = PARAMS.adaptiveBudgetRefEmpty;
-  if (emptyCount >= ref) return PARAMS.aiTimeBudget;
-  const t = 1 - Math.max(0, emptyCount) / ref;              // 0 bei ref, →1 bei leer
-  const factor = 1 + t * (PARAMS.adaptiveBudgetMaxFactor - 1);
-  return Math.round(PARAMS.aiTimeBudget * factor);
+  let budget = PARAMS.aiTimeBudget;
+  if (emptyCount < ref) {
+    const t = 1 - Math.max(0, emptyCount) / ref;              // 0 bei ref, →1 bei leer
+    const factor = 1 + t * (PARAMS.adaptiveBudgetMaxFactor - 1);
+    budget = PARAMS.aiTimeBudget * factor;
+  }
+  /* Feedback: falls die letzte Simulation langsamer war als die freie-
+     Felder-Schätzung erwarten ließ, direkt nachkorrigieren — das greift
+     unabhängig davon, WAS die Verlangsamung verursacht (Randkampf,
+     große Gruppen, Ko-Ketten, egal). */
+  if (_lastMsPerSim !== null) {
+    const neededForTarget = _lastMsPerSim * PARAMS.adaptiveBudgetTargetMinSims;
+    const cap = PARAMS.aiTimeBudget * PARAMS.adaptiveBudgetMaxFactor;
+    budget = Math.max(budget, Math.min(neededForTarget, cap));
+  }
+  return Math.round(budget);
 }
 
 /* ── Globale Scratchpads (einmalig alloziert, nie GC'd) ──── */
@@ -854,8 +877,9 @@ function _tryReuseSubtree(savedBoard, aiColor, savedNode, currentBoard) {
 }
 
 function mctsPUCT(board, aiColor, captures, rootScored, koPoint) {
+  const _simStart = Date.now();
   const timeBudget = getAdaptiveTimeBudget(rootScored.length);
-  const deadline = Date.now() + timeBudget;
+  const deadline = _simStart + timeBudget;
   /* Sicherheitsbremse: getLegalMoves/floodFill werden auf dichten Spätspiel-
      Brettern mit großen zusammenhängenden Gruppen erheblich teurer (beobachtet:
      86% weniger Sims über 156 Züge in einer echten Partie, da jeder Kandidat
@@ -946,6 +970,10 @@ function mctsPUCT(board, aiColor, captures, rootScored, koPoint) {
   }
   let bm = root.kids[0], bn = -1;
   for (const k of root.kids) if (k.N > bn) { bn = k.N; bm = k; }
+
+  /* Feedback für den nächsten Zug: tatsächliche ms/Sim messen, unabhängig
+     davon was die Kosten verursacht hat (Randkampf, große Gruppen, egal). */
+  if (sims > 0) _lastMsPerSim = (Date.now() - _simStart) / sims;
 
   /* Teilbaum unter unserem gewählten Zug für den nächsten Aufruf sichern */
   if (PARAMS.mctsTreeReuse >= 1) {
@@ -2254,6 +2282,8 @@ globalThis.policyNet = new PolicyNet();
          tip:'Ab so vielen freien Feldern beginnt die Verlängerung (stufenlos, kein harter Sprung)'},
         {key:'adaptiveBudgetMaxFactor', label:'Max-Faktor', step:0.1, min:1, max:5, float:true,
          tip:'Obergrenze bei komplett vollem Brett, z.B. 2.5 = bis zu 2.5× Basis-Zeit'},
+        {key:'adaptiveBudgetTargetMinSims', label:'Ziel-Min-Sims', step:10, min:20, max:300, main:true,
+         tip:'⭐ HAUPTHEBEL. Direkte Messkorrektur — wenn letzter Zug weniger Sims schaffte, wird automatisch mehr Zeit gegeben, unabhängig von der Ursache (Randkampf, große Gruppen etc.)'},
         {key:'rolloutSample',     label:'Rollout-Sample',   step:8,   min:0,   max:200,
          tip:'Stichprobe legaler Züge pro Rollout-Ply. ↓ = mehr Sims (schneller), 0 = alle Züge prüfen (alt, langsam)'},
         {key:'rolloutWeight',     label:'Rollout-Anteil',   step:0.05,min:0,   max:1,    float:true,
