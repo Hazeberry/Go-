@@ -335,8 +335,31 @@ globalThis.PARAMS = {
   netScoreScale:   5000,
   /* First-Play-Urgency: Startwert für unbesuchte MCTS-Knoten (Fix #5) */
   mctsFPU:         0.45,
+  /* Adaptives Zeitbudget (Tin/GLM-Vorschlag, stufenlos statt Sprungfunktion).
+     Reale Partie zeigte 86% Sim-Rückgang über 156 Züge (317→43) durch
+     wachsende floodFill-Kosten auf großen Gruppen — kontinuierlicher Verfall,
+     keine Klippe an einer festen Schwelle. Skalierung folgt daher demselben
+     Muster: linearer Anstieg ab adaptiveBudgetRefEmpty freien Feldern bis
+     max. adaptiveBudgetMaxFactor bei komplett vollem Brett. */
+  adaptiveBudgetEnabled:    1,
+  adaptiveBudgetRefEmpty: 150,    // ab hier beginnt die Zeitverlängerung
+  adaptiveBudgetMaxFactor: 2.5,   // Obergrenze bei leerem Feld-Vorrat (0 frei)
 };
 globalThis.PARAMS_DEFAULT = Object.freeze({...PARAMS});
+
+/* Stufenlose Zeitbudget-Skalierung nach freien Feldern. Läuft in worker-ai,
+   also sowohl im Worker als auch im Hauptthread aufrufbar (triggerAIMove
+   nutzt dieselbe Funktion für den Watchdog — Fix C aus Tins Review: der
+   Watchdog muss mit demselben Budget skalieren, sonst wird der Puffer im
+   Endspiel unbemerkt knapper als beabsichtigt). */
+function getAdaptiveTimeBudget(emptyCount) {
+  if (PARAMS.adaptiveBudgetEnabled < 1) return PARAMS.aiTimeBudget;
+  const ref = PARAMS.adaptiveBudgetRefEmpty;
+  if (emptyCount >= ref) return PARAMS.aiTimeBudget;
+  const t = 1 - Math.max(0, emptyCount) / ref;              // 0 bei ref, →1 bei leer
+  const factor = 1 + t * (PARAMS.adaptiveBudgetMaxFactor - 1);
+  return Math.round(PARAMS.aiTimeBudget * factor);
+}
 
 /* ── Globale Scratchpads (einmalig alloziert, nie GC'd) ──── */
 const _legalScratch   = new Uint8Array(BOARD_SIZE);
@@ -749,13 +772,19 @@ function sampleLegalMoves(board, color, S, koPoint) {
   return moves;
 }
 
-function rollout(board, startColor, histHashes, captures, depth, rootColor, koPoint) {
+function rollout(board, startColor, histHashes, captures, depth, rootColor, koPoint, hardDeadline) {
   _rolloutScratch.set(board);
   const simCap = {1: captures[1]||0, 2: captures[2]||0};
   let color = startColor, passes = 0;
   const S = PARAMS.rolloutSample | 0;
   let currentKo = koPoint;   /* Fix 7: Ko-Punkt wandert durch die Simulation */
   for (let d = 0; d < depth; d++) {
+    /* Sicherheitsbremse: getLegalMoves/floodFill werden auf dichten Brettern
+       mit großen Gruppen teuer — jeder Ply hier kostet potenziell mehrere
+       Kandidaten-floodFills. Ohne diese Prüfung könnte ein einzelner Rollout
+       bei einer pathologisch teuren Stellung die gesamte Zeit aufbrauchen,
+       bevor mctsPUCT's äußere Schleife überhaupt wieder zum Zug kommt. */
+    if (hardDeadline !== undefined && Date.now() > hardDeadline) break;
     const opp = color === 1 ? 2 : 1;
     const legal = (S > 0)
       ? sampleLegalMoves(_rolloutScratch, color, S, currentKo)
@@ -825,7 +854,17 @@ function _tryReuseSubtree(savedBoard, aiColor, savedNode, currentBoard) {
 }
 
 function mctsPUCT(board, aiColor, captures, rootScored, koPoint) {
-  const deadline = Date.now() + PARAMS.aiTimeBudget;
+  const timeBudget = getAdaptiveTimeBudget(rootScored.length);
+  const deadline = Date.now() + timeBudget;
+  /* Sicherheitsbremse: getLegalMoves/floodFill werden auf dichten Spätspiel-
+     Brettern mit großen zusammenhängenden Gruppen erheblich teurer (beobachtet:
+     86% weniger Sims über 156 Züge in einer echten Partie, da jeder Kandidat
+     eine eigene floodFill über potenziell riesige Gruppen auslöst). Die äußere
+     while-Schleife prüft die Deadline nur ZWISCHEN Simulationen — eine einzelne
+     Simulation konnte dadurch die Zeit weit überschreiten, bevor die Prüfung
+     überhaupt griff. hardDeadline begrenzt eine einzelne Simulation hart,
+     unabhängig davon wie teuer floodFill auf dem aktuellen Brett gerade ist. */
+  const hardDeadline = deadline + timeBudget;
   const scale = PARAMS.mctsValueScale, c = PARAMS.puctC;
   const rave = PARAMS.raveEnabled >= 1, raveK = PARAMS.raveK;
 
@@ -844,6 +883,7 @@ function mctsPUCT(board, aiColor, captures, rootScored, koPoint) {
     let node = root, color = aiColor, v = null;
     const path = [];   /* {parentNode, color, kid} je Tiefe — für Standard- und AMAF-Backup */
     for (let depth = 0; depth < PARAMS.mctsMaxDepth; depth++) {
+      if (Date.now() > hardDeadline) break;   /* Sicherheitsbremse: teure Expansion abbrechen */
       if (node !== root && node.kids === null) {
         const legal = getLegalMoves(_mctsScratch, color, _emptyHashes);
         const list = legal.map(m => ({m, score: quickEval(_mctsScratch, m.idx, color)}));
@@ -874,7 +914,7 @@ function mctsPUCT(board, aiColor, captures, rootScored, koPoint) {
       const firstVisit = best.N === 0;
       color = opp; node = best;
       if (firstVisit) {   /* Blatt: kurzer Rollout als Wert-Schätzung */
-        v = Math.tanh(rollout(_mctsScratch, color, null, cap, PARAMS.mctsRolloutDepth, aiColor, koPoint) / scale);
+        v = Math.tanh(rollout(_mctsScratch, color, null, cap, PARAMS.mctsRolloutDepth, aiColor, koPoint, hardDeadline) / scale);
         break;
       }
     }
@@ -998,7 +1038,7 @@ function getAIMove(board, aiColor, histHashes, captures, mc, diff, reqId, koPoin
     if (PARAMS.useMCTS >= 1) {
       const r = mctsPUCT(board, aiColor, captures, scored, koPoint);
       if (r) return {type:'stone', x:r.m.x, y:r.m.y, requestId:reqId,
-        info:`MCTS ${r.sims} Sims · ${r.share}% ${coordToLabel(r.m.x,r.m.y)} · Q ${r.q.toFixed(2)}`};
+        info:`MCTS ${r.sims}${r.sims < 50 ? ' ⚠' : ''} Sims · ${r.share}% ${coordToLabel(r.m.x,r.m.y)} · Q ${r.q.toFixed(2)}`};
       return {type:'pass', requestId:reqId};
     }
     let CAND, R, D;
@@ -1023,7 +1063,9 @@ function getAIMove(board, aiColor, histHashes, captures, mc, diff, reqId, koPoin
     if (!cands.length) return {type:'pass', requestId:reqId};
     const opp = aiColor === 1 ? 2 : 1;
     let bm = cands[0].m, bs = -Infinity;
-    const deadline = Date.now() + PARAMS.aiTimeBudget;
+    const timeBudget = getAdaptiveTimeBudget(empty);
+    const deadline = Date.now() + timeBudget;
+    const hardDeadline = deadline + timeBudget;   /* Sicherheitsbremse, s. mctsPUCT */
     _simScratch.set(board);
     for (const {m, score} of cands) {
       if (Date.now() > deadline) break;
@@ -1031,7 +1073,7 @@ function getAIMove(board, aiColor, histHashes, captures, mc, diff, reqId, koPoin
       const {captured:cn, undo} = removeDeadGroupsUndoable(_simScratch, opp, m.idx);
       const sc = {1:captures[1], 2:captures[2]}; sc[aiColor] += cn;
       let tot = 0;
-      for (let r = 0; r < R; r++) tot += rollout(_simScratch, opp, histHashes, sc, D, aiColor, koPoint);
+      for (let r = 0; r < R; r++) tot += rollout(_simScratch, opp, histHashes, sc, D, aiColor, koPoint, hardDeadline);
       const comb = (tot/R) * PARAMS.rolloutWeight + score * PARAMS.scoreWeight;
       if (comb > bs) { bs = comb; bm = m; }
       applyUndo(_simScratch, undo);
@@ -1361,6 +1403,12 @@ function triggerAIMove() {
   const reqId = ++state.aiRequestId;
   updateAIStatus(); updateUndoButton();
 
+  /* Fix C (Tin/GLM-Review): billiger Roh-Scan für den Watchdog — NICHT
+     getLegalMoves (das wäre der teure floodFill-Scan selbst). Nur zum
+     Schätzen, wie viel adaptive Zeit dieser Zug bekommen wird. */
+  let _emptyCount = 0;
+  for (let i = 0; i < BOARD_SIZE; i++) if (state.board[i] === 0) _emptyCount++;
+
   let _netInp = null, _netPriors = null, _netHidden = null;
   if (globalThis.policyNet && policyNet.blendWeight > 0 && state.aiDifficulty === 'hard') {
     /* Letzten Zug mitgeben — Feature-Layer 8 war vorher immer leer */
@@ -1416,7 +1464,8 @@ function triggerAIMove() {
          Zeit den Fallback. aiTimeBudget ist die geplante Denkzeit — das
          Dreifache plus Puffer lässt genug Luft für langsame Geräte, ohne
          bei einem echten Hänger ewig zu warten. */
-      const watchdogMs = PARAMS.aiTimeBudget * 3 + 3000;
+      const _adaptiveBudget = getAdaptiveTimeBudget(_emptyCount);
+      const watchdogMs = _adaptiveBudget * 3 + 3000;
       setTimeout(() => {
         if (reqId !== state.aiRequestId) return;   /* längst erledigt/abgebrochen */
         if (!state.aiThinking) return;             /* Antwort kam bereits an */
@@ -2198,7 +2247,13 @@ globalThis.policyNet = new PolicyNet();
         {key:'passMinMc80',       label:'Pass mc>80',       step:5,   min:-100,max:100,
          tip:'Mittelspiel-Pass-Schwelle'},
         {key:'aiTimeBudget',      label:'Zeit-Budget ms',   step:100, min:100, max:5000, main:true,
-         tip:'⭐ HAUPTHEBEL. ↓ 1200 bei Ruckeln auf Smartphone. ↑ 2500 auf PC.'},
+         tip:'⭐ HAUPTHEBEL. ↓ 1200 bei Ruckeln auf Smartphone. ↑ 2500 auf PC. Basis-Wert für die adaptive Skalierung unten.'},
+        {key:'adaptiveBudgetEnabled', label:'Adaptiv (0/1)', step:1, min:0, max:1,
+         tip:'1 = mehr Zeit im dichten Endspiel (echte Partie zeigte 86% Sim-Rückgang durch teure floodFill). 0 = immer festes Budget.'},
+        {key:'adaptiveBudgetRefEmpty', label:'Ref. Freifelder', step:10, min:20, max:300,
+         tip:'Ab so vielen freien Feldern beginnt die Verlängerung (stufenlos, kein harter Sprung)'},
+        {key:'adaptiveBudgetMaxFactor', label:'Max-Faktor', step:0.1, min:1, max:5, float:true,
+         tip:'Obergrenze bei komplett vollem Brett, z.B. 2.5 = bis zu 2.5× Basis-Zeit'},
         {key:'rolloutSample',     label:'Rollout-Sample',   step:8,   min:0,   max:200,
          tip:'Stichprobe legaler Züge pro Rollout-Ply. ↓ = mehr Sims (schneller), 0 = alle Züge prüfen (alt, langsam)'},
         {key:'rolloutWeight',     label:'Rollout-Anteil',   step:0.05,min:0,   max:1,    float:true,
