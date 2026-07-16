@@ -96,7 +96,10 @@
     <div class="panel">
       <div class="panel-title" style="display:flex;justify-content:space-between;align-items:center;">
         <span>Zugprotokoll</span>
-        <button id="btn-copy-log" style="font-size:.55rem;padding:2px 8px;font-family:'Noto Sans Mono',monospace;background:transparent;color:var(--ui-dim);border:1px solid var(--ui-border);border-radius:2px;cursor:pointer;letter-spacing:.05em;" title="Protokoll kopieren">📋</button>
+        <span>
+          <button id="btn-copy-log" style="font-size:.55rem;padding:2px 8px;font-family:'Noto Sans Mono',monospace;background:transparent;color:var(--ui-dim);border:1px solid var(--ui-border);border-radius:2px;cursor:pointer;letter-spacing:.05em;" title="Protokoll kopieren">📋</button>
+          <button id="btn-bug-report" style="font-size:.55rem;padding:2px 8px;font-family:'Noto Sans Mono',monospace;background:transparent;color:var(--ui-dim);border:1px solid var(--ui-border);border-radius:2px;cursor:pointer;letter-spacing:.05em;" title="Bug-Report kopieren (Protokoll + Brettzustand + KI-Diagnose)">🐞</button>
+        </span>
       </div>
       <div id="log"></div>
     </div>
@@ -1147,6 +1150,11 @@ const state = {
   currentHash: computeZobrist(createBoard()),
   consecutivePasses: 0, moveCount: 0, gameOver: false, log: [], lastMove: null,
   koPoint: null,                          // Fix 7: 1-Ply-Ko-Punkt (Index oder null)
+  /* Bug-Report-Daten: Diagnose pro KI-Zug + exakter Zustand VOR dem letzten
+     KI-Zug. Motivation: der Hänger nach Zug 185 (Session 15.7.) war nicht
+     reproduzierbar, weil der Brettzustand fehlte — das Zugprotokoll allein
+     reicht nicht (Ko, Gefangene, Superko-Historie gehen verloren). */
+  aiDiag: [], lastAIRequest: null, aiReqT0: 0, aiReqBudget: 0,
   aiEnabled: false, aiColor: 2, aiDifficulty: 'easy',
   aiThinking: false, aiRequestId: 0, aiWorker: null, aiWorkerCtx: null, deadStones: new Set(), undoStack: []
 };
@@ -1255,7 +1263,8 @@ function resetGame() {
     boardHistory: new Set([eh]), currentHash: eh,
     consecutivePasses: 0, moveCount: 0, gameOver: false, lastMove: null,
     koPoint: null,                         // Fix 7
-    log: [], aiThinking: false, deadStones: new Set(), undoStack: []
+    log: [], aiThinking: false, deadStones: new Set(), undoStack: [],
+    aiDiag: [], lastAIRequest: null, aiReqT0: 0, aiReqBudget: 0
   });
   pendingTouch = null;
   document.getElementById('territory-panel').style.display = 'none';
@@ -1346,6 +1355,16 @@ function applyAIResult(result, reqId, netInp, netPriors, netHidden) {
       state.log.push(`   ↳ ${result.info}`);
     }
   } else pass();
+  /* Diagnose-Zeile für den Bug-Report: was hatte die KI vor, wie lange hat
+     sie wirklich gebraucht, mit welchem Budget? dauerMs >> budgetMs zeigt
+     einen Zug, bei dem die Sicherheitsbremsen greifen mussten. */
+  state.aiDiag.push({
+    zug: state.moveCount, typ: result.type, info: result.info || null,
+    dauerMs: state.aiReqT0 ? Date.now() - state.aiReqT0 : null,
+    budgetMs: state.aiReqT0 ? state.aiReqBudget : null,
+    msProSim: typeof _lastMsPerSim === 'number' ? Math.round(_lastMsPerSim * 100) / 100 : null
+  });
+  state.aiReqT0 = 0;
   state.aiThinking = false;
   render(); updateUI(); updateAIStatus(); updateUndoButton();
   if (!state.gameOver && state.aiEnabled && state.currentPlayer === state.aiColor) triggerAIMove();
@@ -1480,6 +1499,24 @@ function triggerAIMove() {
   }
 
   if (state.aiDifficulty === 'hard') {
+    /* Bug-Report-Snapshot: exakter Zustand VOR diesem KI-Zug, in derselben
+       Form wie das Worker-postMessage — damit ein Hänger später außerhalb
+       des Spiels 1:1 nachgestellt werden kann (getAIMove mit genau diesen
+       Daten füttern). Wird von buildBugReport() exportiert. */
+    const _adaptiveBudget = getAdaptiveTimeBudget(_emptyCount);
+    state.aiReqT0 = Date.now();
+    state.aiReqBudget = _adaptiveBudget;
+    state.lastAIRequest = {
+      board:      Array.from(state.board),
+      aiColor:    state.aiColor,
+      histHashes: Array.from(state.boardHistory),
+      captures:   {...state.captures},
+      mc:         state.moveCount,
+      koPoint:    state.koPoint,
+      params:     JSON.parse(JSON.stringify(PARAMS)),
+      netBlend:   _netPriors ? policyNet.blendWeight : 0,
+      lastMsPerSim: _lastMsPerSim
+    };
     if (state.workerDead) { fallbackToMainThread(reqId, _netInp, _netPriors, _netHidden); return; }
     try {
       if (!state.aiWorker) {
@@ -1523,8 +1560,8 @@ function triggerAIMove() {
          (kein try/catch der Welt hilft dagegen), erzwinge nach großzügiger
          Zeit den Fallback. aiTimeBudget ist die geplante Denkzeit — das
          Dreifache plus Puffer lässt genug Luft für langsame Geräte, ohne
-         bei einem echten Hänger ewig zu warten. */
-      const _adaptiveBudget = getAdaptiveTimeBudget(_emptyCount);
+         bei einem echten Hänger ewig zu warten. (_adaptiveBudget wird oben
+         beim Bug-Report-Snapshot berechnet — dieselbe Zahl für beide.) */
       const watchdogMs = _adaptiveBudget * 3 + 3000;
       setTimeout(() => {
         if (reqId !== state.aiRequestId) return;   /* längst erledigt/abgebrochen */
@@ -1807,19 +1844,67 @@ document.getElementById('btn-reset').addEventListener('click',()=>{
   if(state.aiEnabled&&!humanTurn())triggerAIMove();
 });
 
-document.getElementById('btn-copy-log').addEventListener('click', () => {
-  const text = state.log.join('\n');
-  navigator.clipboard.writeText(text).then(() => {
-    const btn = document.getElementById('btn-copy-log');
+function copyWithFeedback(text, btnId, idleLabel) {
+  const done = () => {
+    const btn = document.getElementById(btnId);
     btn.textContent = '✓'; btn.style.color = 'var(--green)';
-    setTimeout(() => { btn.textContent = '📋'; btn.style.color = ''; }, 1500);
-  }).catch(() => {
+    setTimeout(() => { btn.textContent = idleLabel; btn.style.color = ''; }, 1500);
+  };
+  navigator.clipboard.writeText(text).then(done).catch(() => {
     const ta = document.createElement('textarea');
     ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
     document.body.appendChild(ta); ta.select();
     document.execCommand('copy');
     document.body.removeChild(ta);
+    done();
   });
+}
+
+document.getElementById('btn-copy-log').addEventListener('click', () => {
+  copyWithFeedback(state.log.join('\n'), 'btn-copy-log', '📋');
+});
+
+/* ═══ Bug-Report: Zugprotokoll + exakter Reproduktions-Zustand ═══
+   Kombiniert alles, was zum Nachstellen eines KI-Problems nötig ist:
+   - zugprotokoll: die menschenlesbare Zugliste (wie 📋)
+   - kiDiagnose:   pro KI-Zug Sims/Q aus info, echte Dauer vs. Budget, ms/Sim
+   - brett:        ASCII-Brett des AKTUELLEN Zustands (X=Schwarz, O=Weiß)
+   - reproduktion: der letzte Worker-Request 1:1 (Brett, Historie-Hashes,
+     Gefangene, Ko-Punkt, PARAMS) — getAIMove damit füttern reproduziert
+     exakt den Zug, bei dem es geklemmt hat. Genau das fehlte beim nicht
+     reproduzierbaren Hänger nach Zug 185. */
+function buildBugReport() {
+  const rows = [];
+  for (let y = 0; y < SIZE; y++) {
+    let r = '';
+    for (let x = 0; x < SIZE; x++) r += '.XO'[state.board[idx(x, y)]] + ' ';
+    rows.push(String(SIZE - y).padStart(2) + ' ' + r.trimEnd());
+  }
+  rows.push('   ' + COL_LETTERS.split('').join(' '));
+  return JSON.stringify({
+    meta: {
+      erstellt:   new Date().toISOString(),
+      userAgent:  navigator.userAgent,
+      zug:        state.moveCount,
+      amZug:      state.currentPlayer === 1 ? 'Schwarz' : 'Weiß',
+      kiFarbe:    state.aiColor === 1 ? 'Schwarz' : 'Weiß',
+      kiStufe:    state.aiDifficulty,
+      kiDenkt:    state.aiThinking,
+      workerDead: state.workerDead,
+      spielVorbei: state.gameOver,
+      koPoint:    state.koPoint,
+      gefangene:  {...state.captures},
+      msProSim:   typeof _lastMsPerSim === 'number' ? Math.round(_lastMsPerSim * 100) / 100 : null
+    },
+    brett: rows,
+    zugprotokoll: state.log,
+    kiDiagnose: state.aiDiag,
+    reproduktion: state.lastAIRequest
+  }, null, 1);
+}
+
+document.getElementById('btn-bug-report').addEventListener('click', () => {
+  copyWithFeedback(buildBugReport(), 'btn-bug-report', '🐞');
 });
 render();updateUI();updateAIStatus();updateUndoButton();
 </script>
