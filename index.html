@@ -96,7 +96,10 @@
     <div class="panel">
       <div class="panel-title" style="display:flex;justify-content:space-between;align-items:center;">
         <span>Zugprotokoll</span>
-        <button id="btn-copy-log" style="font-size:.55rem;padding:2px 8px;font-family:'Noto Sans Mono',monospace;background:transparent;color:var(--ui-dim);border:1px solid var(--ui-border);border-radius:2px;cursor:pointer;letter-spacing:.05em;" title="Protokoll kopieren">📋</button>
+        <span>
+          <button id="btn-copy-log" style="font-size:.55rem;padding:2px 8px;font-family:'Noto Sans Mono',monospace;background:transparent;color:var(--ui-dim);border:1px solid var(--ui-border);border-radius:2px;cursor:pointer;letter-spacing:.05em;" title="Protokoll kopieren">📋</button>
+          <button id="btn-bug-report" style="font-size:.55rem;padding:2px 8px;font-family:'Noto Sans Mono',monospace;background:transparent;color:var(--ui-dim);border:1px solid var(--ui-border);border-radius:2px;cursor:pointer;letter-spacing:.05em;" title="Bug-Report kopieren (Protokoll + Brettzustand + KI-Diagnose)">🐞</button>
+        </span>
       </div>
       <div id="log"></div>
     </div>
@@ -174,20 +177,84 @@ function floodFill(board, startIdx) {
   return { group, liberties };
 }
 
+/* ═══ estimateArea-Perf-Refactor: allokationsfreie Gruppen-Primitiven ═══
+   Messung (Partie vom 16.7., 205 Züge nachgespielt): ms/Sim stieg vom
+   frühen Spiel bis Zug 205 um ×11,7 — auf Desktop-CPU genauso wie auf dem
+   Telefon, also Code, nicht Hardware. Ursache: floodFill baut bei JEDEM
+   Aufruf group- und liberties-Arrays, aber fast alle heißen Aufrufer
+   (Legalitätsprüfung, quickEval, evaluateBoard) brauchen nur eine ZAHL —
+   meist nur »hat die Gruppe überhaupt eine Freiheit?«. Bei den großen
+   zusammenhängenden Spätspiel-Gruppen heißt das: kompletter Gruppen-Walk
+   plus zwei Array-Allokationen pro Kandidat, wo ein Abbruch bei der
+   ersten gefundenen Freiheit reichen würde.
+
+   countLiberties zählt Freiheiten ohne jede Allokation und bricht ab,
+   sobald `cap` Freiheiten gefunden sind: cap=1 → »lebt?«, cap=2 → »Atari?«,
+   cap=3 → »≤2 Freiheiten?«. floodFill bleibt für die Aufrufer bestehen,
+   die wirklich die Zellenlisten brauchen (buildCrisisMap, findEyes, UI). */
+const _groupQueue = new Int32Array(BOARD_SIZE);
+
+function countLiberties(board, startIdx, cap) {
+  const color = board[startIdx];
+  const limit = cap === undefined ? 0x7fffffff : cap;
+  const epoch = ++_ffEpoch;
+  let head = 0, tail = 0, libs = 0;
+  _groupQueue[tail++] = startIdx;
+  _ffVisited[startIdx] = epoch;
+  while (head < tail) {
+    const i = _groupQueue[head++];
+    for (const n of NEIGHBORS[i]) {
+      if (_ffVisited[n] === epoch) continue;
+      _ffVisited[n] = epoch;
+      const c = board[n];
+      if (c === 0) { if (++libs >= limit) return libs; }
+      else if (c === color) _groupQueue[tail++] = n;
+    }
+  }
+  return libs;
+}
+
+/* Entfernt eine als tot ERKANNTE Gruppe (0 Freiheiten, vom Aufrufer
+   geprüft). board[g]=0 dient dabei selbst als Besucht-Marker. */
+function _removeDeadGroup(board, startIdx) {
+  const color = board[startIdx];
+  let head = 0, tail = 0, removed = 1;
+  _groupQueue[tail++] = startIdx; board[startIdx] = 0;
+  while (head < tail) {
+    const g = _groupQueue[head++];
+    for (const n of NEIGHBORS[g])
+      if (board[n] === color) { board[n] = 0; _groupQueue[tail++] = n; removed++; }
+  }
+  return removed;
+}
+
 const _rdgChecked = new Int32Array(BOARD_SIZE);
 
 function removeDeadGroups(board, color, nearIdx) {
   const epoch = ++_ffEpoch;
   let captured = 0;
-  const cells = (nearIdx !== undefined)
-    ? NEIGHBORS[nearIdx].filter(n => board[n] === color)
-    : (() => { const r = []; for (let i = 0; i < BOARD_SIZE; i++) if (board[i] === color) r.push(i); return r; })();
-  for (const i of cells) {
-    if (board[i] !== color || _rdgChecked[i] === epoch) continue;
-    const {group, liberties} = floodFill(board, i);
-    for (const g of group) _rdgChecked[g] = epoch;
-    if (liberties.length === 0)
-      for (const g of group) { board[g] = 0; captured++; }
+  if (nearIdx !== undefined) {
+    /* Heißer Pfad (pro Kandidat/Rollout-Ply): lebende Nachbargruppen kosten
+       nur noch einen Early-Exit-Scan, keine Arrays. Das _rdgChecked-Dedupe
+       markiert nur den Startstein — trifft ein zweiter Nachbar dieselbe
+       lebende Gruppe, kostet das einen weiteren billigen Scan, mehr nicht. */
+    for (const n of NEIGHBORS[nearIdx]) {
+      if (board[n] !== color || _rdgChecked[n] === epoch) continue;
+      _rdgChecked[n] = epoch;
+      if (countLiberties(board, n, 1) > 0) continue;
+      captured += _removeDeadGroup(board, n);
+    }
+  } else {
+    /* Ganzes-Brett-Variante (selten: Scoring/UI): floodFill markiert die
+       komplette Gruppe als geprüft — sonst würde jeder Stein einer großen
+       lebenden Gruppe einen eigenen Scan auslösen (O(Gruppe²)). */
+    for (let i = 0; i < BOARD_SIZE; i++) {
+      if (board[i] !== color || _rdgChecked[i] === epoch) continue;
+      const {group, liberties} = floodFill(board, i);
+      for (const g of group) _rdgChecked[g] = epoch;
+      if (liberties.length === 0)
+        for (const g of group) { board[g] = 0; captured++; }
+    }
   }
   return captured;
 }
@@ -403,15 +470,32 @@ function removeDeadGroupsUndoable(board, color, nearIdx) {
   const epoch = ++_ffEpoch;
   let captured = 0;
   const undo = [];
-  const cells = (nearIdx !== undefined)
-    ? NEIGHBORS[nearIdx].filter(n => board[n] === color)
-    : (() => { const r = []; for (let i = 0; i < BOARD_SIZE; i++) if (board[i] === color) r.push(i); return r; })();
-  for (const i of cells) {
-    if (board[i] !== color || _rdgChecked[i] === epoch) continue;
-    const {group, liberties} = floodFill(board, i);
-    for (const g of group) _rdgChecked[g] = epoch;
-    if (liberties.length === 0)
-      for (const g of group) { undo.push({idx:g, oldColor:board[g]}); board[g] = 0; captured++; }
+  if (nearIdx !== undefined) {
+    /* Heißer Pfad (jede Legalitätsprüfung in getLegalMoves/sampleLegalMoves):
+       lebende Gruppen kosten nur den Early-Exit-Scan, s. removeDeadGroups.
+       Tote Gruppen werden per BFS entfernt — das undo-Array dient dabei
+       gleich als Queue, weil die Einträge in BFS-Reihenfolge anfallen und
+       board[g]=0 als Besucht-Marker wirkt. */
+    for (const nb of NEIGHBORS[nearIdx]) {
+      if (board[nb] !== color || _rdgChecked[nb] === epoch) continue;
+      _rdgChecked[nb] = epoch;
+      if (countLiberties(board, nb, 1) > 0) continue;
+      let head = undo.length;
+      undo.push({idx: nb, oldColor: color}); board[nb] = 0; captured++;
+      while (head < undo.length) {
+        const g = undo[head++].idx;
+        for (const n of NEIGHBORS[g])
+          if (board[n] === color) { undo.push({idx: n, oldColor: color}); board[n] = 0; captured++; }
+      }
+    }
+  } else {
+    for (let i = 0; i < BOARD_SIZE; i++) {
+      if (board[i] !== color || _rdgChecked[i] === epoch) continue;
+      const {group, liberties} = floodFill(board, i);
+      for (const g of group) _rdgChecked[g] = epoch;
+      if (liberties.length === 0)
+        for (const g of group) { undo.push({idx:g, oldColor:board[g]}); board[g] = 0; captured++; }
+    }
   }
   return {captured, undo};
 }
@@ -443,7 +527,7 @@ function getLegalMoves(board, color, historyHashes, koPoint, hardDeadline) {
     _legalScratch[i] = color;
     const {captured, undo} = removeDeadGroupsUndoable(_legalScratch, opp, i);
     let legal = true;
-    if (captured === 0 && floodFill(_legalScratch, i).liberties.length === 0) legal = false;
+    if (captured === 0 && countLiberties(_legalScratch, i, 1) === 0) legal = false;
     if (legal && (!checkSuperko || !historyHashes.has(computeZobrist(_legalScratch))))
       moves.push({x: xOf(i), y: yOf(i), idx: i});
     applyUndo(_legalScratch, undo);
@@ -468,9 +552,9 @@ function evalOpening(board, i, color, mc) {
   _evalScratch[i] = color;
   const cap = removeDeadGroups(_evalScratch, opp, i);
   if (cap === 0) {
-    const {liberties} = floodFill(_evalScratch, i);
-    if (liberties.length === 0) s -= 10000;
-    else if (liberties.length === 1) s -= 200;
+    const lib = countLiberties(_evalScratch, i, 2);
+    if (lib === 0) s -= 10000;
+    else if (lib === 1) s -= 200;
   } else s += cap * PARAMS.openCapBonus;
   let ownNbr = 0;
   for (const n of NEIGHBORS[i]) if (board[n] === color) ownNbr++;
@@ -496,11 +580,11 @@ function evalMidgame(board, i, color, mc) {
     const c = board[n];
     if (c === color) {
       on++;
-      const info = floodFill(board, n);
-      if (info.liberties.length === 1) s += PARAMS.midRescueAtari;
-      if (info.liberties.length === 2) s += PARAMS.midRescue2Lib;
+      const l = countLiberties(board, n, 3);
+      if (l === 1) s += PARAMS.midRescueAtari;
+      if (l === 2) s += PARAMS.midRescue2Lib;
     } else if (c === opp) {
-      const l = floodFill(board, n).liberties.length;
+      const l = countLiberties(board, n, 4);
       if (l === 1) s += PARAMS.midOppAtari;
       if (l === 2) s += PARAMS.midOpp2Lib;
       if (l === 3) s += PARAMS.midOpp3Lib;
@@ -517,13 +601,17 @@ function evalMidgame(board, i, color, mc) {
     if (sec) s += PARAMS.midSafeBonus;
   }
   for (const n of NEIGHBORS[i])
-    if (_evalScratch[n] === opp && floodFill(_evalScratch, n).liberties.length === 1) s += PARAMS.midOppAtariNear;
+    if (_evalScratch[n] === opp && countLiberties(_evalScratch, n, 2) === 1) s += PARAMS.midOppAtariNear;
   return s + Math.random() * 4;
 }
 
 const _areaVisited = new Int32Array(BOARD_SIZE);
 let   _areaEpoch   = 0;
 
+/* Perf-Refactor: Regionen werden nur noch GEZÄHLT (size), nicht mehr als
+   Array gesammelt — die queue-/region-Allokationen pro Region entfallen.
+   _groupQueue aus shared-go-logic ist hier frei (keine Verschachtelung
+   mit countLiberties/_removeDeadGroup — estimateArea ruft nichts davon). */
 function estimateArea(board, color) {
   const opp = color === 1 ? 2 : 1;
   let area = 0;
@@ -533,20 +621,20 @@ function estimateArea(board, color) {
     if (c === color) { area++; continue; }
     if (c === opp)   continue;
     if (_areaVisited[i] === epoch) continue;
-    let head = 0; const queue = [i]; _areaVisited[i] = epoch;
-    const region = [i];
+    let head = 0, tail = 0, size = 0;
+    _groupQueue[tail++] = i; _areaVisited[i] = epoch;
     let touchesOwn = false, touchesOpp = false;
-    while (head < queue.length) {
-      const cur = queue[head++];
+    while (head < tail) {
+      const cur = _groupQueue[head++]; size++;
       for (const n of NEIGHBORS[cur]) {
         const cc = board[n];
         if (cc === 0) {
-          if (_areaVisited[n] !== epoch) { _areaVisited[n] = epoch; queue.push(n); region.push(n); }
+          if (_areaVisited[n] !== epoch) { _areaVisited[n] = epoch; _groupQueue[tail++] = n; }
         } else if (cc === color) touchesOwn = true;
         else touchesOpp = true;
       }
     }
-    if (touchesOwn && !touchesOpp) area += region.length;
+    if (touchesOwn && !touchesOpp) area += size;
   }
   return area;
 }
@@ -574,8 +662,7 @@ function evalEndgame(board, i, color, mc) {
   _evalScratch.set(board);
   _evalScratch[i] = color;
   const cap = removeDeadGroups(_evalScratch, opp, i);
-  const own = floodFill(_evalScratch, i);
-  const lib = own.liberties.length;
+  const lib = countLiberties(_evalScratch, i, 2);
   if (lib === 0 && cap === 0) return -10000 + Math.random();
   const areaAfter = estimateArea(_evalScratch, color);
   const oppAfter  = estimateArea(_evalScratch, opp);
@@ -585,7 +672,7 @@ function evalEndgame(board, i, color, mc) {
   s += cap * PARAMS.endCapBonus;
   if (lib === 1 && cap === 0) s -= PARAMS.endAtariPenalty;
   for (const n of NEIGHBORS[i]) {
-    if (board[n] === opp && floodFill(board, n).liberties.length === 1) s += PARAMS.endOppAtari;
+    if (board[n] === opp && countLiberties(board, n, 2) === 1) s += PARAMS.endOppAtari;
   }
   return s + Math.random() * 0.5;
 }
@@ -634,7 +721,7 @@ function evalNakade(boardBefore, boardAfter, i, opp) {
     if (!before.liberties.includes(i)) continue;
     const libsBefore = before.liberties.length;
     if (boardAfter[n] !== opp) { bonus += 1200; continue; }
-    const libsAfter = floodFill(boardAfter, n).liberties.length;
+    const libsAfter = countLiberties(boardAfter, n, 3);
     if      (libsAfter === 0)                          bonus += 1200;
     else if (libsAfter === 1)                          bonus += 700;
     else if (libsAfter === 2 && libsBefore <= 3)       bonus += 250;
@@ -655,15 +742,15 @@ function evalTsumego(board, i, color, mc) {
   s += cap * PARAMS.tsumegoCapBonus;
   for (const n of NEIGHBORS[i]) {
     if (_tsumegoScratch[n] !== opp) continue;
-    const l = floodFill(_tsumegoScratch, n).liberties.length;
+    const l = countLiberties(_tsumegoScratch, n, 3);
     if (l === 1) s += PARAMS.tsumegoAtariSet;
     else if (l === 2) s += PARAMS.tsumego2Lib;
   }
   for (const n of NEIGHBORS[i]) {
     if (board[n] !== color) continue;
-    const before = floodFill(board, n).liberties.length;
+    const before = countLiberties(board, n, 3);
     if (before <= 2) {
-      const after = floodFill(_tsumegoScratch, n).liberties.length;
+      const after = countLiberties(_tsumegoScratch, n, 3);
       if (before === 1) {
         if      (after >= 3) s += PARAMS.tsumegoRescue3;
         else if (after === 2) s += PARAMS.tsumegoRescue2;
@@ -699,8 +786,8 @@ function evalTsumego(board, i, color, mc) {
   s += evalNakade(board, _tsumegoScratch, i, opp) * PARAMS.tsumegoNakade;
   for (const n of NEIGHBORS[i]) {
     if (board[n] !== color) continue;
-    const before = floodFill(board, n).liberties.length;
-    const after  = floodFill(_tsumegoScratch, n).liberties.length;
+    const before = countLiberties(board, n, 2);
+    const after  = countLiberties(_tsumegoScratch, n, 2);
     if (after === 1 && before > 1) s -= PARAMS.tsumegoWeaken;
   }
   return s * safetyMul + Math.random() * 3;
@@ -745,34 +832,50 @@ function evaluateMove(board, i, color, mc, emptyFields) {
 function quickEval(board, i, color) {
   const opp = color === 1 ? 2 : 1;
   let score = 0, free = 0, oppN = 0, ownN = 0;
+  /* countLiberties mit Cap statt floodFill: läuft pro Rollout-Kandidat und
+     pro MCTS-Expansions-Kind — die Arrays hier waren der heißeste Müll. */
   for (const n of NEIGHBORS[i]) {
     const c = board[n];
     if (c === 0) free++;
-    else if (c === opp) { oppN++; if (floodFill(board, n).liberties.length === 1) score += 200; }
-    else { ownN++; if (floodFill(board, n).liberties.length <= 2) score += 80; }
+    else if (c === opp) { oppN++; if (countLiberties(board, n, 2) === 1) score += 200; }
+    else { ownN++; if (countLiberties(board, n, 3) <= 2) score += 80; }
   }
   _quickScratch.set(board);
   _quickScratch[i] = color;
   const cap = removeDeadGroups(_quickScratch, opp, i);
   score += cap * 500;
-  const selfLib = floodFill(_quickScratch, i).liberties.length;
+  const selfLib = countLiberties(_quickScratch, i, 2);
   if (selfLib === 1 && cap === 0) score -= 300;
   return score + free*40 + oppN*20 + ownN*15 + Math.random()*5;
 }
 
-/* Fix #3: evaluateBoard läuft einmal pro MCTS-Simulation (tausende Male
-   pro Zug). Die Uint8Array-Allokation pro Aufruf erzeugte messbaren
-   GC-Druck — jetzt ein wiederverwendetes Modul-Scratchpad mit fill(0). */
-const _evalBoardSeen = new Uint8Array(BOARD_SIZE);
+/* Fix #3 + Perf-Refactor: evaluateBoard läuft einmal pro MCTS-Simulation
+   (tausende Male pro Zug). Statt floodFill pro Gruppe (zwei Arrays pro
+   Aufruf!) jetzt ein einziger BFS-Durchlauf, der nur ZÄHLT: Gruppengröße
+   direkt, Freiheiten dedupliziert über eine Epochen-Markierung pro Gruppe.
+   Null Allokationen, identisches Ergebnis. */
+const _evalBoardSeen = new Int32Array(BOARD_SIZE);
 function evaluateBoard(board, color, captures) {
   const opp = color === 1 ? 2 : 1;
   let s = ((captures[color]||0) - (captures[opp]||0)) * 20;
-  const seen = _evalBoardSeen; seen.fill(0);
+  const seenEpoch = ++_ffEpoch;
   for (let i = 0; i < BOARD_SIZE; i++) {
-    const c = board[i]; if (!c || seen[i]) continue;
-    const {group, liberties} = floodFill(board, i);
-    for (const g of group) seen[g] = 1;
-    const v = group.length * 5 + liberties.length * 3;
+    const c = board[i]; if (!c || _evalBoardSeen[i] === seenEpoch) continue;
+    const libEpoch = ++_ffEpoch;
+    let head = 0, tail = 0, size = 0, libs = 0;
+    _groupQueue[tail++] = i; _evalBoardSeen[i] = seenEpoch;
+    while (head < tail) {
+      const g = _groupQueue[head++]; size++;
+      for (const n of NEIGHBORS[g]) {
+        const cc = board[n];
+        if (cc === c) {
+          if (_evalBoardSeen[n] !== seenEpoch) { _evalBoardSeen[n] = seenEpoch; _groupQueue[tail++] = n; }
+        } else if (cc === 0 && _ffVisited[n] !== libEpoch) {
+          _ffVisited[n] = libEpoch; libs++;
+        }
+      }
+    }
+    const v = size * 5 + libs * 3;
     s += (c === color) ? v : -v;
   }
   return s;
@@ -804,7 +907,7 @@ function sampleLegalMoves(board, color, S, koPoint, hardDeadline) {
     _legalScratch[i] = color;
     const {captured, undo} = removeDeadGroupsUndoable(_legalScratch, opp, i);
     let legal = true;
-    if (captured === 0 && floodFill(_legalScratch, i).liberties.length === 0) legal = false;
+    if (captured === 0 && countLiberties(_legalScratch, i, 1) === 0) legal = false;
     applyUndo(_legalScratch, undo);
     _legalScratch[i] = 0;
     if (legal) moves.push({x: xOf(i), y: yOf(i), idx: i});
@@ -1147,6 +1250,11 @@ const state = {
   currentHash: computeZobrist(createBoard()),
   consecutivePasses: 0, moveCount: 0, gameOver: false, log: [], lastMove: null,
   koPoint: null,                          // Fix 7: 1-Ply-Ko-Punkt (Index oder null)
+  /* Bug-Report-Daten: Diagnose pro KI-Zug + exakter Zustand VOR dem letzten
+     KI-Zug. Motivation: der Hänger nach Zug 185 (Session 15.7.) war nicht
+     reproduzierbar, weil der Brettzustand fehlte — das Zugprotokoll allein
+     reicht nicht (Ko, Gefangene, Superko-Historie gehen verloren). */
+  aiDiag: [], lastAIRequest: null, aiReqT0: 0, aiReqBudget: 0,
   aiEnabled: false, aiColor: 2, aiDifficulty: 'easy',
   aiThinking: false, aiRequestId: 0, aiWorker: null, aiWorkerCtx: null, deadStones: new Set(), undoStack: []
 };
@@ -1255,7 +1363,8 @@ function resetGame() {
     boardHistory: new Set([eh]), currentHash: eh,
     consecutivePasses: 0, moveCount: 0, gameOver: false, lastMove: null,
     koPoint: null,                         // Fix 7
-    log: [], aiThinking: false, deadStones: new Set(), undoStack: []
+    log: [], aiThinking: false, deadStones: new Set(), undoStack: [],
+    aiDiag: [], lastAIRequest: null, aiReqT0: 0, aiReqBudget: 0
   });
   pendingTouch = null;
   document.getElementById('territory-panel').style.display = 'none';
@@ -1346,6 +1455,16 @@ function applyAIResult(result, reqId, netInp, netPriors, netHidden) {
       state.log.push(`   ↳ ${result.info}`);
     }
   } else pass();
+  /* Diagnose-Zeile für den Bug-Report: was hatte die KI vor, wie lange hat
+     sie wirklich gebraucht, mit welchem Budget? dauerMs >> budgetMs zeigt
+     einen Zug, bei dem die Sicherheitsbremsen greifen mussten. */
+  state.aiDiag.push({
+    zug: state.moveCount, typ: result.type, info: result.info || null,
+    dauerMs: state.aiReqT0 ? Date.now() - state.aiReqT0 : null,
+    budgetMs: state.aiReqT0 ? state.aiReqBudget : null,
+    msProSim: typeof _lastMsPerSim === 'number' ? Math.round(_lastMsPerSim * 100) / 100 : null
+  });
+  state.aiReqT0 = 0;
   state.aiThinking = false;
   render(); updateUI(); updateAIStatus(); updateUndoButton();
   if (!state.gameOver && state.aiEnabled && state.currentPlayer === state.aiColor) triggerAIMove();
@@ -1480,6 +1599,24 @@ function triggerAIMove() {
   }
 
   if (state.aiDifficulty === 'hard') {
+    /* Bug-Report-Snapshot: exakter Zustand VOR diesem KI-Zug, in derselben
+       Form wie das Worker-postMessage — damit ein Hänger später außerhalb
+       des Spiels 1:1 nachgestellt werden kann (getAIMove mit genau diesen
+       Daten füttern). Wird von buildBugReport() exportiert. */
+    const _adaptiveBudget = getAdaptiveTimeBudget(_emptyCount);
+    state.aiReqT0 = Date.now();
+    state.aiReqBudget = _adaptiveBudget;
+    state.lastAIRequest = {
+      board:      Array.from(state.board),
+      aiColor:    state.aiColor,
+      histHashes: Array.from(state.boardHistory),
+      captures:   {...state.captures},
+      mc:         state.moveCount,
+      koPoint:    state.koPoint,
+      params:     JSON.parse(JSON.stringify(PARAMS)),
+      netBlend:   _netPriors ? policyNet.blendWeight : 0,
+      lastMsPerSim: _lastMsPerSim
+    };
     if (state.workerDead) { fallbackToMainThread(reqId, _netInp, _netPriors, _netHidden); return; }
     try {
       if (!state.aiWorker) {
@@ -1523,8 +1660,8 @@ function triggerAIMove() {
          (kein try/catch der Welt hilft dagegen), erzwinge nach großzügiger
          Zeit den Fallback. aiTimeBudget ist die geplante Denkzeit — das
          Dreifache plus Puffer lässt genug Luft für langsame Geräte, ohne
-         bei einem echten Hänger ewig zu warten. */
-      const _adaptiveBudget = getAdaptiveTimeBudget(_emptyCount);
+         bei einem echten Hänger ewig zu warten. (_adaptiveBudget wird oben
+         beim Bug-Report-Snapshot berechnet — dieselbe Zahl für beide.) */
       const watchdogMs = _adaptiveBudget * 3 + 3000;
       setTimeout(() => {
         if (reqId !== state.aiRequestId) return;   /* längst erledigt/abgebrochen */
@@ -1807,19 +1944,67 @@ document.getElementById('btn-reset').addEventListener('click',()=>{
   if(state.aiEnabled&&!humanTurn())triggerAIMove();
 });
 
-document.getElementById('btn-copy-log').addEventListener('click', () => {
-  const text = state.log.join('\n');
-  navigator.clipboard.writeText(text).then(() => {
-    const btn = document.getElementById('btn-copy-log');
+function copyWithFeedback(text, btnId, idleLabel) {
+  const done = () => {
+    const btn = document.getElementById(btnId);
     btn.textContent = '✓'; btn.style.color = 'var(--green)';
-    setTimeout(() => { btn.textContent = '📋'; btn.style.color = ''; }, 1500);
-  }).catch(() => {
+    setTimeout(() => { btn.textContent = idleLabel; btn.style.color = ''; }, 1500);
+  };
+  navigator.clipboard.writeText(text).then(done).catch(() => {
     const ta = document.createElement('textarea');
     ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
     document.body.appendChild(ta); ta.select();
     document.execCommand('copy');
     document.body.removeChild(ta);
+    done();
   });
+}
+
+document.getElementById('btn-copy-log').addEventListener('click', () => {
+  copyWithFeedback(state.log.join('\n'), 'btn-copy-log', '📋');
+});
+
+/* ═══ Bug-Report: Zugprotokoll + exakter Reproduktions-Zustand ═══
+   Kombiniert alles, was zum Nachstellen eines KI-Problems nötig ist:
+   - zugprotokoll: die menschenlesbare Zugliste (wie 📋)
+   - kiDiagnose:   pro KI-Zug Sims/Q aus info, echte Dauer vs. Budget, ms/Sim
+   - brett:        ASCII-Brett des AKTUELLEN Zustands (X=Schwarz, O=Weiß)
+   - reproduktion: der letzte Worker-Request 1:1 (Brett, Historie-Hashes,
+     Gefangene, Ko-Punkt, PARAMS) — getAIMove damit füttern reproduziert
+     exakt den Zug, bei dem es geklemmt hat. Genau das fehlte beim nicht
+     reproduzierbaren Hänger nach Zug 185. */
+function buildBugReport() {
+  const rows = [];
+  for (let y = 0; y < SIZE; y++) {
+    let r = '';
+    for (let x = 0; x < SIZE; x++) r += '.XO'[state.board[idx(x, y)]] + ' ';
+    rows.push(String(SIZE - y).padStart(2) + ' ' + r.trimEnd());
+  }
+  rows.push('   ' + COL_LETTERS.split('').join(' '));
+  return JSON.stringify({
+    meta: {
+      erstellt:   new Date().toISOString(),
+      userAgent:  navigator.userAgent,
+      zug:        state.moveCount,
+      amZug:      state.currentPlayer === 1 ? 'Schwarz' : 'Weiß',
+      kiFarbe:    state.aiColor === 1 ? 'Schwarz' : 'Weiß',
+      kiStufe:    state.aiDifficulty,
+      kiDenkt:    state.aiThinking,
+      workerDead: state.workerDead,
+      spielVorbei: state.gameOver,
+      koPoint:    state.koPoint,
+      gefangene:  {...state.captures},
+      msProSim:   typeof _lastMsPerSim === 'number' ? Math.round(_lastMsPerSim * 100) / 100 : null
+    },
+    brett: rows,
+    zugprotokoll: state.log,
+    kiDiagnose: state.aiDiag,
+    reproduktion: state.lastAIRequest
+  }, null, 1);
+}
+
+document.getElementById('btn-bug-report').addEventListener('click', () => {
+  copyWithFeedback(buildBugReport(), 'btn-bug-report', '🐞');
 });
 render();updateUI();updateAIStatus();updateUndoButton();
 </script>
