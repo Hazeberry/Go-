@@ -1015,6 +1015,30 @@ function mctsPUCT(board, aiColor, captures, rootScored, koPoint) {
   let root = null;
   if (PARAMS.mctsTreeReuse >= 1 && _mctsSavedRoot && _mctsSavedRoot.aiColor === aiColor) {
     root = _tryReuseSubtree(_mctsSavedRoot.board, aiColor, _mctsSavedRoot.node, board);
+    /* Wiederverwendete Wurzeln VALIDIEREN — zwei bewiesene Fallen aus der
+       347-Züge-Partie vom 16.7.:
+       1. Spielt der Mensch einen Zug, dessen Knoten nie expandiert wurde
+          (kids === null — bei wenigen Sims pro Zug häufig), crashte das
+          root.kids.length unten mit TypeError. Der Crash tötete erst den
+          Worker (workerError) und später denselben Code im Hauptthread-
+          Fallback — aiThinking blieb für immer true, die KI hing.
+       2. Die Kinder wiederverwendeter Wurzeln wurden im VORHERIGEN Zug
+          ohne den aktuellen Ko-/Superko-Kontext expandiert. rootScored
+          ist gefiltert, der Reuse-Baum nicht: Zug 270 verbrannte das
+          komplette Suchbudget auf den Ko-verbotenen Rückschlag G8 und
+          spielte dann einen Notzug (A19). Deshalb: Kinder gegen die
+          aktuelle legale Zugliste filtern, Besuche entfernter Kinder aus
+          root.N herausrechnen. */
+    if (root && (!root.kids || !root.kids.length)) root = null;
+    if (root) {
+      const legalSet = new Set(rootScored.map(s => s.m.idx));
+      const kept = root.kids.filter(k => legalSet.has(k.idx));
+      if (kept.length !== root.kids.length) {
+        for (const k of root.kids) if (!legalSet.has(k.idx)) root.N -= k.N;
+        root.kids = kept;
+        if (!kept.length) root = null;
+      }
+    }
   }
   if (!root) root = {N: 0, W: 0, kids: _mctsKids(rootScored, PARAMS.mctsRootChildren)};
   if (!root.kids.length) return null;
@@ -1255,6 +1279,7 @@ const state = {
      reproduzierbar, weil der Brettzustand fehlte — das Zugprotokoll allein
      reicht nicht (Ko, Gefangene, Superko-Historie gehen verloren). */
   aiDiag: [], lastAIRequest: null, aiReqT0: 0, aiReqBudget: 0,
+  workerDeadReason: null,
   aiEnabled: false, aiColor: 2, aiDifficulty: 'easy',
   aiThinking: false, aiRequestId: 0, aiWorker: null, aiWorkerCtx: null, deadStones: new Set(), undoStack: []
 };
@@ -1355,6 +1380,7 @@ function resetGame() {
   /* Worker-Pool beenden — neuer Worker beim nächsten Hard-Zug */
   cleanupWorker();
   state.workerDead = false;   /* Neues Spiel = neuer Versuch */
+  state.workerDeadReason = null;
   if (globalThis.policyNet) { policyNet._trained=false; policyNet._gameBuffer=[]; }
   state.aiRequestId++;
   const eb = createBoard(), eh = computeZobrist(eb);
@@ -1535,10 +1561,22 @@ function cleanupWorker() {
 function fallbackToMainThread(reqId, netInp, netPriors, netHidden) {
   setTimeout(() => {
     if (reqId !== state.aiRequestId) return;
-    const r = getAIMove(state.board, state.aiColor,
-      Array.from(state.boardHistory), {...state.captures},
-      state.moveCount, 'hard', reqId,
-      state.koPoint);                        /* Fix 7 */
+    let r;
+    try {
+      r = getAIMove(state.board, state.aiColor,
+        Array.from(state.boardHistory), {...state.captures},
+        state.moveCount, 'hard', reqId,
+        state.koPoint);                      /* Fix 7 */
+    } catch (e) {
+      /* Letzte Verteidigungslinie: wirft getAIMove hier, gibt es keinen
+         Watchdog mehr, der uns rettet — ohne dieses catch blieb aiThinking
+         für immer true und die KI hing (so gesehen in der 347-Züge-Partie:
+         der Reuse-Crash tötete erst den Worker, dann denselben Code hier). */
+      console.error('[Fallback] getAIMove synchron gescheitert:', e);
+      state.log.push(`! KI-Fehler (synchron): ${(e && e.message) || e} → Notzug`);
+      const fb = findAnyLegalMove(state.aiColor);
+      r = fb ? {type:'stone', x:fb.x, y:fb.y, requestId:reqId} : {type:'pass', requestId:reqId};
+    }
     applyAIResult(r, reqId, netInp, netPriors, netHidden);
   }, 10);
 }
@@ -1557,6 +1595,11 @@ function attachWorkerHandlers() {
        WebViews onerror bei geworfenen Exceptions nicht zuverlässig feuern. */
     if (e.data && e.data.type === 'workerError') {
       console.error('[Worker] Interner Fehler:', e.data.message, e.data.stack || '');
+      /* Grund festhalten und ins Protokoll — der Worker-Tod in der
+         347-Züge-Partie war unsichtbar, weil er nur in der Konsole stand.
+         So landet er im Zugprotokoll UND im 🐞-Bug-Report. */
+      state.workerDeadReason = `workerError: ${e.data.message || 'unbekannt'}`;
+      state.log.push(`! Worker-Fehler: ${e.data.message || 'unbekannt'} → synchroner Modus`);
       state.workerDead = true;
       cleanupWorker();
       fallbackToMainThread(e.data.reqId,
@@ -1569,6 +1612,8 @@ function attachWorkerHandlers() {
   state.aiWorker.onerror = function(err) {
     console.error('[Worker] Fehler:', err.message || err);
     const ctx = state.aiWorkerCtx;
+    state.workerDeadReason = `onerror: ${err.message || 'unbekannt'}`;
+    state.log.push(`! Worker-Crash: ${err.message || 'unbekannt'} → synchroner Modus`);
     state.workerDead = true;   /* nicht bei jedem Zug erneut versuchen */
     cleanupWorker();
     fallbackToMainThread(state.aiRequestId,
@@ -1663,14 +1708,24 @@ function triggerAIMove() {
          bei einem echten Hänger ewig zu warten. (_adaptiveBudget wird oben
          beim Bug-Report-Snapshot berechnet — dieselbe Zahl für beide.) */
       const watchdogMs = _adaptiveBudget * 3 + 3000;
-      setTimeout(() => {
+      const _watchdog = () => {
         if (reqId !== state.aiRequestId) return;   /* längst erledigt/abgebrochen */
         if (!state.aiThinking) return;             /* Antwort kam bereits an */
+        /* Hintergrund-Tab: Android pausiert Worker UND Timer — ein
+           suspendierter Worker ist nicht tot. Nicht töten, weiter warten;
+           erst ein Timeout bei SICHTBARER Seite zählt als echter Hänger. */
+        if (typeof document !== 'undefined' && document.hidden) {
+          setTimeout(_watchdog, watchdogMs);
+          return;
+        }
         console.warn('[Worker] Watchdog: keine Antwort nach', watchdogMs, 'ms — erzwinge Fallback');
+        state.workerDeadReason = `Watchdog: keine Antwort nach ${watchdogMs} ms`;
+        state.log.push(`! Worker-Watchdog (${watchdogMs} ms) → synchroner Modus`);
         state.workerDead = true;
         cleanupWorker();
         fallbackToMainThread(reqId, _netInp, _netPriors, _netHidden);
-      }, watchdogMs);
+      };
+      setTimeout(_watchdog, watchdogMs);
     } catch(e) {
       /* Versuch 3: Hauptthread */
       console.warn('[triggerAIMove] Worker nicht verfügbar, synchron:', e);
@@ -1991,6 +2046,7 @@ function buildBugReport() {
       kiStufe:    state.aiDifficulty,
       kiDenkt:    state.aiThinking,
       workerDead: state.workerDead,
+      workerDeadReason: state.workerDeadReason || null,
       spielVorbei: state.gameOver,
       koPoint:    state.koPoint,
       gefangene:  {...state.captures},
