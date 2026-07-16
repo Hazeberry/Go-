@@ -355,7 +355,14 @@ globalThis.PARAMS = {
 globalThis.PARAMS_DEFAULT = Object.freeze({...PARAMS});
 
 /* Modul-Zustand: letzte gemessene ms/Sim, lebt im Worker zwischen Zügen
-   (Worker-Pool macht's möglich) — dieselbe Technik wie _mctsSavedRoot. */
+   (Worker-Pool macht's möglich) — dieselbe Technik wie _mctsSavedRoot.
+   ACHTUNG Desync-Falle: worker-ai läuft als eigenständiges Script sowohl
+   im Hauptthread als auch im Worker — zwei getrennte JS-Umgebungen mit
+   eigenen Kopien dieser Variable. Der Worker misst, aber der Hauptthread-
+   Watchdog (triggerAIMove) rechnete für immer mit null. Deshalb meldet
+   der Worker seinen Messwert bei jeder Antwort zurück (lastMsPerSim im
+   postMessage), und attachWorkerHandlers übernimmt ihn in die
+   Hauptthread-Kopie — beide Seiten rechnen mit denselben Daten. */
 let _lastMsPerSim = null;
 
 /* Stufenlose Zeitbudget-Skalierung nach freien Feldern ALS BASIS, plus
@@ -413,7 +420,7 @@ function applyUndo(board, undo) {
   for (let i = undo.length - 1; i >= 0; i--) board[undo[i].idx] = undo[i].oldColor;
 }
 
-function getLegalMoves(board, color, historyHashes, koPoint) {
+function getLegalMoves(board, color, historyHashes, koPoint, hardDeadline) {
   const opp = color === 1 ? 2 : 1;
   const moves = [];
   /* PERF: Rollouts übergeben ein leeres Hash-Set — dann den teuren
@@ -422,9 +429,17 @@ function getLegalMoves(board, color, historyHashes, koPoint) {
   const checkSuperko = historyHashes && historyHashes.size > 0;
   const hasKo = koPoint !== null && koPoint !== undefined;
   _legalScratch.set(board);
+  /* hardDeadline: Sicherheitsbremse IN der Kandidatenschleife. Bisher wurde
+     die Deadline nur zwischen Plies/Simulationen geprüft — ein einzelner
+     Scan über 300+ Kandidaten mit floodFill über riesige Gruppen konnte
+     diese Lücke komplett überspringen. Alle 16 Kandidaten prüfen; eine
+     abgeschnittene Liste ist für Rollouts/Expansion okay (heuristisch),
+     Root-Aufrufe übergeben KEINE Deadline und bleiben vollständig. */
+  let _checked = 0;
   for (let i = 0; i < BOARD_SIZE; i++) {
     if (board[i] !== 0) continue;
     if (hasKo && i === koPoint) continue;   /* Fix 7: 1-Ply-Ko, billig */
+    if (hardDeadline !== undefined && (++_checked & 15) === 0 && Date.now() > hardDeadline) break;
     _legalScratch[i] = color;
     const {captured, undo} = removeDeadGroupsUndoable(_legalScratch, opp, i);
     let legal = true;
@@ -770,7 +785,7 @@ const _emptyHashes = new Set();
    Ply ~85% der Legalitätsprüfungen. Iteriert geshuffelt weiter, falls
    die ersten Kandidaten illegal sind → Pass-Erkennung bleibt korrekt.
    PARAMS.rolloutSample = 0 stellt das alte Verhalten wieder her. */
-function sampleLegalMoves(board, color, S, koPoint) {
+function sampleLegalMoves(board, color, S, koPoint, hardDeadline) {
   const empties = [];
   for (let i = 0; i < BOARD_SIZE; i++) if (board[i] === 0) empties.push(i);
   if (!empties.length) return [];
@@ -780,6 +795,8 @@ function sampleLegalMoves(board, color, S, koPoint) {
   const hasKo = koPoint !== null && koPoint !== undefined;
   _legalScratch.set(board);
   for (let j = 0; j < empties.length && moves.length < limit; j++) {
+    /* Sicherheitsbremse in der heißen Schleife, s. getLegalMoves */
+    if (hardDeadline !== undefined && (j & 15) === 15 && Date.now() > hardDeadline) break;
     const r = j + Math.floor(Math.random() * (empties.length - j));
     const t = empties[j]; empties[j] = empties[r]; empties[r] = t;
     const i = empties[j];
@@ -810,8 +827,8 @@ function rollout(board, startColor, histHashes, captures, depth, rootColor, koPo
     if (hardDeadline !== undefined && Date.now() > hardDeadline) break;
     const opp = color === 1 ? 2 : 1;
     const legal = (S > 0)
-      ? sampleLegalMoves(_rolloutScratch, color, S, currentKo)
-      : getLegalMoves(_rolloutScratch, color, _emptyHashes, currentKo);
+      ? sampleLegalMoves(_rolloutScratch, color, S, currentKo, hardDeadline)
+      : getLegalMoves(_rolloutScratch, color, _emptyHashes, currentKo, hardDeadline);
     if (!legal.length) { if (++passes >= 2) break; color = opp; currentKo = null; continue; }
     passes = 0;
     const scored = legal.map(m => ({m, score: quickEval(_rolloutScratch, m.idx, color)}));
@@ -909,7 +926,12 @@ function mctsPUCT(board, aiColor, captures, rootScored, koPoint) {
     for (let depth = 0; depth < PARAMS.mctsMaxDepth; depth++) {
       if (Date.now() > hardDeadline) break;   /* Sicherheitsbremse: teure Expansion abbrechen */
       if (node !== root && node.kids === null) {
-        const legal = getLegalMoves(_mctsScratch, color, _emptyHashes);
+        const legal = getLegalMoves(_mctsScratch, color, _emptyHashes, null, hardDeadline);
+        /* Deadline währenddessen gerissen → Liste evtl. abgeschnitten.
+           NICHT cachen: kids=[] würde den Knoten dauerhaft als terminal
+           markieren (Tree-Reuse trägt ihn in den nächsten Zug!). kids
+           bleibt null, der Knoten wird beim nächsten Besuch neu expandiert. */
+        if (Date.now() > hardDeadline) break;
         const list = legal.map(m => ({m, score: quickEval(_mctsScratch, m.idx, color)}));
         list.sort((a,b) => b.score - a.score);
         node.kids = _mctsKids(list, PARAMS.mctsChildren);
@@ -1365,13 +1387,17 @@ function buildWorkerSource() {
           d.koPoint ?? null                      /* Fix 7: 8. Parameter */
         );
         if (globalThis.policyNet) globalThis.policyNet._netPriors = null;
-        self.postMessage({...result, reqId: d.reqId});
+        /* lastMsPerSim mitschicken: der Hauptthread-Watchdog hat eine
+           EIGENE Kopie von _lastMsPerSim (getrennte JS-Umgebung) und
+           würde ohne diese Rückmeldung für immer mit null rechnen. */
+        self.postMessage({...result, reqId: d.reqId, lastMsPerSim: _lastMsPerSim});
       } catch (err) {
         self.postMessage({
           type: 'workerError',
           message: (err && err.message) || String(err),
           stack: (err && err.stack) || '',
-          reqId: d.reqId
+          reqId: d.reqId,
+          lastMsPerSim: _lastMsPerSim
         });
       }
     };`;
@@ -1401,6 +1427,12 @@ function fallbackToMainThread(reqId, netInp, netPriors, netHidden) {
 function attachWorkerHandlers() {
   state.aiWorker.onmessage = function(e) {
     const ctx = state.aiWorkerCtx;
+    /* Messwert des Workers in die Hauptthread-Kopie übernehmen — der
+       Watchdog in triggerAIMove nutzt getAdaptiveTimeBudget und rechnete
+       sonst für immer mit _lastMsPerSim === null (worker-ai läuft in
+       beiden Umgebungen, aber die Variablen sind getrennte Kopien). */
+    if (e.data && typeof e.data.lastMsPerSim === 'number')
+      _lastMsPerSim = e.data.lastMsPerSim;
     /* Selbst abgefangener Fehler aus dem Worker (siehe buildWorkerSource):
        genauso behandeln wie ein echtes onerror-Event, da manche mobilen
        WebViews onerror bei geworfenen Exceptions nicht zuverlässig feuern. */
