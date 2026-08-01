@@ -51,9 +51,9 @@
     #log { font-family:'Noto Sans Mono',monospace; font-size:.62rem; color:var(--ui-dim); max-height:140px; overflow-y:auto; line-height:1.7; }
     #log::-webkit-scrollbar { width:4px; } #log::-webkit-scrollbar-thumb { background:var(--ui-border); border-radius:2px; }
     .choice-row { display:flex; gap:6px; margin-top:4px; }
-    .diff-btn,.color-btn { flex:1; padding:5px 2px; font-size:.6rem; font-family:'Noto Sans Mono',monospace; background:transparent; color:var(--ui-dim); border:1px solid var(--ui-border); border-radius:2px; cursor:pointer; transition:all .15s; }
-    .diff-btn:hover,.color-btn:hover { border-color:var(--wood); color:var(--wood-light); }
-    .diff-btn.active,.color-btn.active { border-color:var(--green); color:var(--green); background:rgba(39,174,96,.08); }
+    .diff-btn,.color-btn,.scoring-btn { flex:1; padding:5px 2px; font-size:.6rem; font-family:'Noto Sans Mono',monospace; background:transparent; color:var(--ui-dim); border:1px solid var(--ui-border); border-radius:2px; cursor:pointer; transition:all .15s; }
+    .diff-btn:hover,.color-btn:hover,.scoring-btn:hover { border-color:var(--wood); color:var(--wood-light); }
+    .diff-btn.active,.color-btn.active,.scoring-btn.active { border-color:var(--green); color:var(--green); background:rgba(39,174,96,.08); }
     .ai-status { font-size:.6rem; color:var(--ui-dim); margin-top:6px; font-family:'Noto Sans Mono',monospace; }
     .ai-thinking { color:var(--wood-light); animation:pulse 1s infinite; }
     @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.5} }
@@ -73,7 +73,7 @@
       <div class="panel-title">Gefangene</div>
       <div class="score-row"><span class="score-label">Schwarz schlägt</span><span class="score-val" id="captures-b">0</span></div>
       <div class="score-row" style="margin-bottom:0"><span class="score-label">Weiß schlägt</span><span class="score-val" id="captures-w">0</span></div>
-      <div class="score-row territory-row" id="territory-panel" style="display:none"><span class="score-label">Area (Komi 7.5)</span><span class="score-val" id="final-score">–</span></div>
+      <div class="score-row territory-row" id="territory-panel" style="display:none"><span class="score-label" id="final-label">Area (Komi 7.5)</span><span class="score-val" id="final-score">–</span></div>
     </div>
     <div class="panel">
       <div class="panel-title">KI-Modus</div>
@@ -82,6 +82,8 @@
       <div class="choice-row"><button class="color-btn" data-color="1">Schwarz</button><button class="color-btn active" data-color="2">Weiß</button></div>
       <div style="font-size:.6rem;color:var(--ui-dim);margin-top:8px;letter-spacing:.1em;">STÄRKE</div>
       <div class="choice-row"><button class="diff-btn active" data-diff="easy">Leicht</button><button class="diff-btn" data-diff="medium">Mittel</button><button class="diff-btn" data-diff="hard">Schwer</button></div>
+      <div style="font-size:.6rem;color:var(--ui-dim);margin-top:8px;letter-spacing:.1em;">WERTUNG</div>
+      <div class="choice-row"><button class="scoring-btn active" data-scoring="area">Area</button><button class="scoring-btn" data-scoring="territory">Territory</button></div>
       <div class="ai-status" id="ai-status" style="position:relative">KI ist deaktiviert</div>
     </div>
     <div class="panel">
@@ -1448,6 +1450,7 @@ const state = {
   currentHash: computeZobrist(createBoard()),
   consecutivePasses: 0, moveCount: 0, gameOver: false, log: [], lastMove: null,
   koPoint: null,                          // Fix 7: 1-Ply-Ko-Punkt (Index oder null)
+  scoringMode: 'area',                    // 'area' (chinesisch) oder 'territory' (japanisch)
   /* Bug-Report-Daten: Diagnose pro KI-Zug + exakter Zustand VOR dem letzten
      KI-Zug. Motivation: der Hänger nach Zug 185 (Session 15.7.) war nicht
      reproduzierbar, weil der Brettzustand fehlte — das Zugprotokoll allein
@@ -1629,11 +1632,48 @@ function finalAreaScore() {
   return area;
 }
 
+function finalTerritoryScore() {
+  /* Territory (japanisch): Gefangene + umschlossene freie Gebiete.
+     Im Unterschied zu Area werden lebende Steine selbst NICHT gezählt —
+     nur das Gebiet drumherum plus die Gefangenen. */
+  const territory = {1: state.captures[1], 2: state.captures[2]};
+  const visited = new Uint8Array(BOARD_SIZE);
+  for (let i = 0; i < BOARD_SIZE; i++) {
+    if (state.board[i] || visited[i]) continue;
+    const region = [], queue = [i], borders = new Set();
+    let head = 0; visited[i] = 1;
+    while (head < queue.length) {
+      const c = queue[head++]; region.push(c);
+      for (const n of NEIGHBORS[c]) {
+        const cell = state.board[n];
+        if (!cell) { if (!visited[n]) { visited[n] = 1; queue.push(n); } }
+        else borders.add(cell);
+      }
+    }
+    if (borders.size === 1) territory[[...borders][0]] += region.length;
+  }
+  return territory;
+}
+
 function showFinalScore() {
-  const a = finalAreaScore(), bt = a[1], wt = a[2] + KOMI;
-  const diff = Math.abs(bt - wt), winner = bt > wt ? 'Schwarz' : 'Weiß';
+  let scoreB, scoreW, winner, diff, label;
+  if (state.scoringMode === 'territory') {
+    const t = finalTerritoryScore();
+    scoreB = t[1]; scoreW = t[2] + KOMI;
+    label = 'Territory (Komi 7.5)';
+  } else {
+    const a = finalAreaScore();
+    scoreB = a[1]; scoreW = a[2] + KOMI;
+    label = 'Area (Komi 7.5)';
+  }
+  diff = Math.abs(scoreB - scoreW);
+  winner = scoreB > scoreW ? 'Schwarz' : 'Weiß';
+  document.getElementById('final-label').textContent = label;
   document.getElementById('final-score').textContent = `${winner} +${diff.toFixed(1)}`;
   document.getElementById('territory-panel').style.display = 'flex';
+  /* PolicyNet-Training bleibt bewusst auf Area-Scoring — das Netz wurde
+     durchgängig darauf kalibriert; ein Wechsel der Anzeige-Wertung soll
+     die gelernte Skala nicht verschieben. */
   if (globalThis.policyNet && !policyNet._trained) {
     policyNet._trained = true;
     const _a = finalAreaScore(), _ac = state.aiColor;
@@ -2166,6 +2206,11 @@ document.querySelectorAll('.color-btn').forEach(btn=>btn.addEventListener('click
   document.querySelectorAll('.color-btn').forEach(b=>b.classList.remove('active'));
   this.classList.add('active');state.aiColor=parseInt(this.dataset.color);updateAIStatus();
   if(state.aiEnabled&&!state.gameOver&&!humanTurn()){state.aiRequestId++;triggerAIMove();}
+}));
+
+document.querySelectorAll('.scoring-btn').forEach(btn=>btn.addEventListener('click',function(){
+  document.querySelectorAll('.scoring-btn').forEach(b=>b.classList.remove('active'));
+  this.classList.add('active');state.scoringMode=this.dataset.scoring;
 }));
 
 document.getElementById('btn-pass').addEventListener('click',()=>{
