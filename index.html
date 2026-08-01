@@ -101,6 +101,7 @@
         <span>
           <button id="btn-copy-log" style="font-size:.55rem;padding:2px 8px;font-family:'Noto Sans Mono',monospace;background:transparent;color:var(--ui-dim);border:1px solid var(--ui-border);border-radius:2px;cursor:pointer;letter-spacing:.05em;" title="Protokoll kopieren">📋</button>
           <button id="btn-bug-report" style="font-size:.55rem;padding:2px 8px;font-family:'Noto Sans Mono',monospace;background:transparent;color:var(--ui-dim);border:1px solid var(--ui-border);border-radius:2px;cursor:pointer;letter-spacing:.05em;" title="Bug-Report kopieren (Protokoll + Brettzustand + KI-Diagnose)">🐞</button>
+          <button id="btn-sgf" style="font-size:.55rem;padding:2px 8px;font-family:'Noto Sans Mono',monospace;background:transparent;color:var(--ui-dim);border:1px solid var(--ui-border);border-radius:2px;cursor:pointer;letter-spacing:.05em;" title="Als SGF herunterladen">SGF</button>
         </span>
       </div>
       <div id="log"></div>
@@ -551,6 +552,22 @@ globalThis.PARAMS = {
   netScoreScale:   5000,
   /* First-Play-Urgency: Startwert für unbesuchte MCTS-Knoten (Fix #5) */
   mctsFPU:         0.45,
+  /* Schärfe des PUCT-Priors. 0 = alter Rang-Prior (fast flach, verwirft Scores).
+     Höher = Softmax über die tatsächlichen Heuristik-Scores. */
+  mctsPriorSharp:    3,
+  /* Lokalität: Go ist überwiegend ein Antwortspiel. Ohne diesen Term bewertet
+     die Heuristik einen Zug in der leeren Ecke exakt wie eine Antwort auf die
+     akute Bedrohung nebenan — im 511-Zug-Log sichtbar als Streuspiel (Weiß
+     sprang bei fast jedem Zug in eine andere Ecke, 191:4 Steine verloren).
+     MESSUNG (20 Antwortzuege, Heuristik isoliert, Chebyshev-Distanz):
+       0 -> 7.7 Ø | 80 -> 9.2 | 200 -> 9.1 | 400 -> 2.7 (18/20 lokal)
+     Bis 200 bewegt der Bonus die Rangfolge nicht (Mittelspiel-Scores sind
+     groesser), ab 400 dominiert er und die KI laeuft nur noch hinterher.
+     Kein brauchbarer Zwischenwert -> additive Konstante ist die falsche Form,
+     weil Eroeffnung (~40-95) und Mittelspiel (~Hunderte) andere Skalen haben.
+     Default 0 = altes Verhalten, bis der A/B-Harness eine Aussage erlaubt. */
+  localityBonus:     0,
+  localityRadius:    4,
   /* Adaptives Zeitbudget (Tin/GLM-Vorschlag, stufenlos statt Sprungfunktion).
      Reale Partie zeigte 86% Sim-Rückgang über 156 Züge (317→43) durch
      wachsende floodFill-Kosten auf großen Gruppen — kontinuierlicher Verfall,
@@ -585,6 +602,7 @@ globalThis.PARAMS_DEFAULT = Object.freeze({...PARAMS});
    postMessage), und attachWorkerHandlers übernimmt ihn in die
    Hauptthread-Kopie — beide Seiten rechnen mit denselben Daten. */
 let _lastMsPerSim = null;
+let _lastMoveIdx  = -1;   /* letzter gegnerischer Zug, für Lokalitätsterm */
 
 /* Stufenlose Zeitbudget-Skalierung nach freien Feldern ALS BASIS, plus
    Feedback-Korrektur aus der tatsächlich gemessenen letzten Simulation.
@@ -977,6 +995,14 @@ function evaluateMove(board, i, color, mc, emptyFields) {
   if (wMid  > T) { sPhase += wMid  * evalMidgame(board, i, color, mc); wSum += wMid; }
   if (wEnd  > T) { sPhase += wEnd  * evalEndgame(board, i, color, mc); wSum += wEnd; }
   if (wSum > 0) sPhase /= wSum;
+  /* Lokalitätsbonus: Chebyshev-Distanz zum letzten Gegnerzug, linear
+     abfallend. Vor dem Crisis-Blend, damit Taktik ihn überstimmen darf. */
+  if (PARAMS.localityBonus > 0 && _lastMoveIdx >= 0) {
+    const R = PARAMS.localityRadius;
+    const d = Math.max(Math.abs(xOf(i) - xOf(_lastMoveIdx)),
+                       Math.abs(yOf(i) - yOf(_lastMoveIdx)));
+    if (d <= R) sPhase += PARAMS.localityBonus * (1 - d / (R + 1));
+  }
   const wCrisis = getCrisisWeight(i);
   if (wCrisis === 0) return sPhase;
   const sCrisis = evalTsumego(board, i, color, mc);
@@ -1144,11 +1170,32 @@ const _mctsScratch = new Uint8Array(BOARD_SIZE);
 function _mctsKids(list, K) {
   const n = Math.min(K, list.length);
   if (!n) return [];
-  const sum = n * (n + 1) / 2;
   const kids = new Array(n);
+  let P;
+  const sharp = PARAMS.mctsPriorSharp;
+  if (sharp > 0 && n > 1) {
+    /* Score-basierter Prior (Softmax), skalen-invariant über die Spannweite.
+       Der alte Rang-Prior (n-r)/sum war bei n=16 fast flach — Top 11.8 %,
+       Zweiter 11.0 %, Abstand 0.74 Prozentpunkte — und verwarf die tatsächlichen
+       Heuristik-Scores komplett. Gemessener Best-Move-Anteil lag damit bei
+       10-15 %, also praktisch auf Prior-Niveau: der Baum verschob nichts,
+       die Zugwahl war Rauschen zwischen den Top-Kandidaten.
+       Temperatur folgt der Score-Spannweite, damit derselbe Parameter in
+       der Eröffnung (~40-95) und im Mittelspiel (~Hunderte) gleich wirkt. */
+    const hi = list[0].score, lo = list[n - 1].score;
+    const T = Math.max(1e-6, (hi - lo) / sharp);
+    const w = new Array(n); let Z = 0;
+    for (let r = 0; r < n; r++) { w[r] = Math.exp((list[r].score - hi) / T); Z += w[r]; }
+    P = new Array(n);
+    for (let r = 0; r < n; r++) P[r] = w[r] / Z;
+  } else {
+    const sum = n * (n + 1) / 2;
+    P = new Array(n);
+    for (let r = 0; r < n; r++) P[r] = (n - r) / sum;
+  }
   for (let r = 0; r < n; r++)
     kids[r] = {idx: list[r].m.idx, x: list[r].m.x, y: list[r].m.y,
-               P: (n - r) / sum, N: 0, W: 0, kids: null};
+               P: P[r], N: 0, W: 0, kids: null};
   return kids;
 }
 
@@ -1314,7 +1361,8 @@ function mctsPUCT(board, aiColor, captures, rootScored, koPoint) {
           q: bm.N ? bm.W / bm.N : 0};
 }
 
-function getAIMove(board, aiColor, histHashes, captures, mc, diff, reqId, koPoint) {
+function getAIMove(board, aiColor, histHashes, captures, mc, diff, reqId, koPoint, lastMove) {
+  _lastMoveIdx = (lastMove === undefined || lastMove === null) ? -1 : lastMove;
   const hs = new Set(histHashes);
   const legal = getLegalMoves(board, aiColor, hs, koPoint);
   if (!legal.length) return {type:'pass', requestId:reqId};
@@ -1450,6 +1498,7 @@ const state = {
   currentHash: computeZobrist(createBoard()),
   consecutivePasses: 0, moveCount: 0, gameOver: false, log: [], lastMove: null,
   koPoint: null,                          // Fix 7: 1-Ply-Ko-Punkt (Index oder null)
+  sgfMoves: [],                           // Zugfolge für SGF-Export
   scoringMode: 'area',                    // 'area' (chinesisch) oder 'territory' (japanisch)
   /* Bug-Report-Daten: Diagnose pro KI-Zug + exakter Zustand VOR dem letzten
      KI-Zug. Motivation: der Hänger nach Zug 185 (Session 15.7.) war nicht
@@ -1473,6 +1522,7 @@ function saveUndoState() {
     consecutivePasses: state.consecutivePasses, moveCount: state.moveCount,
     gameOver: state.gameOver, logLength: state.log.length,
     deadStones: new Set(state.deadStones), lastMove: state.lastMove,
+    sgfLen: state.sgfMoves.length,
     koPoint: state.koPoint                  // Fix 7
   });
   if (state.undoStack.length > 50) state.undoStack.shift();
@@ -1488,6 +1538,7 @@ function undo() {
   state.gameOver = prev.gameOver; state.deadStones = prev.deadStones;
   state.lastMove = prev.lastMove; pendingTouch = null;
   state.koPoint = prev.koPoint;            // Fix 7
+  state.sgfMoves.length = prev.sgfLen;     // SGF-Zugliste mit zurückrollen
   state.log.splice(prev.logLength);
   state.boardHistory = new Set([computeZobrist(createBoard())]);
   for (const entry of state.undoStack) state.boardHistory.add(entry.currentHash);
@@ -1532,6 +1583,7 @@ function placeStone(x, y) {
     state.koPoint = null;
   }
   const sym = state.currentPlayer === 1 ? '●' : '○';
+  state.sgfMoves.push({c: state.currentPlayer, x: x, y: y});
   state.log.push(`${state.moveCount}. ${sym} ${coordToLabel(x,y)}${cap ? ` (+${cap})` : ''}`);
   state.currentPlayer = opp;
   drawStateToCache(); updateUndoButton();
@@ -1543,6 +1595,7 @@ function pass() {
   saveUndoState();
   const opp = state.currentPlayer === 1 ? 2 : 1;
   const name = state.currentPlayer === 1 ? '● Schwarz' : '○ Weiß';
+  state.sgfMoves.push({c: state.currentPlayer, pass: true});
   state.log.push(`${++state.moveCount}. ${name} passt`);
   state.consecutivePasses++;
   state.koPoint = null;                   /* Fix 7: Passen bricht Ko */
@@ -1566,6 +1619,7 @@ function resetGame() {
     boardHistory: new Set([eh]), currentHash: eh,
     consecutivePasses: 0, moveCount: 0, gameOver: false, lastMove: null,
     koPoint: null,                         // Fix 7
+    sgfMoves: [],
     log: [], aiThinking: false, deadStones: new Set(), undoStack: [],
     aiDiag: [], lastAIRequest: null, aiReqT0: 0, aiReqBudget: 0
   });
@@ -1754,7 +1808,8 @@ function buildWorkerSource() {
         const result = getAIMove(
           new Uint8Array(d.board), d.aiColor, histSet,
           d.captures, d.mc, 'hard', d.reqId,
-          d.koPoint ?? null                      /* Fix 7: 8. Parameter */
+          d.koPoint ?? null,                     /* Fix 7: 8. Parameter */
+          d.lastMove ?? null                     /* Lokalitätsterm — fehlte in Go-v3: dort kam lastMove nie im Worker an */
         );
         if (globalThis.policyNet) globalThis.policyNet._netPriors = null;
         /* lastMsPerSim mitschicken: der Hauptthread-Watchdog hat eine
@@ -1791,7 +1846,7 @@ function fallbackToMainThread(reqId, netInp, netPriors, netHidden) {
       r = getAIMove(state.board, state.aiColor,
         Array.from(state.boardHistory), {...state.captures},
         state.moveCount, 'hard', reqId,
-        state.koPoint);                      /* Fix 7 */
+        state.koPoint, state.lastMove);      /* Fix 7 + Lokalitätsterm */
     } catch (e) {
       /* Letzte Verteidigungslinie: wirft getAIMove hier, gibt es keinen
          Watchdog mehr, der uns rettet — ohne dieses catch blieb aiThinking
@@ -1883,6 +1938,7 @@ function triggerAIMove() {
       captures:   {...state.captures},
       mc:         state.moveCount,
       koPoint:    state.koPoint,
+      lastMove:   state.lastMove,
       params:     JSON.parse(JSON.stringify(PARAMS)),
       netBlend:   _netPriors ? policyNet.blendWeight : 0,
       lastMsPerSim: _lastMsPerSim
@@ -1921,6 +1977,7 @@ function triggerAIMove() {
         mc:       state.moveCount,
         reqId,
         koPoint:  state.koPoint,               /* Fix 7 */
+        lastMove: state.lastMove,              /* Lokalitätsterm */
         params:   JSON.parse(JSON.stringify(PARAMS)),
         netPriors: _netPriors ? Array.from(_netPriors) : null,
         netBlend:  _netPriors ? policyNet.blendWeight : 0
@@ -1967,9 +2024,68 @@ function triggerAIMove() {
       const r = getAIMove(state.board, state.aiColor,
         Array.from(state.boardHistory), {...state.captures},
         state.moveCount, state.aiDifficulty, reqId,
-        state.koPoint);                      /* Fix 7 */
+        state.koPoint, state.lastMove);      /* Fix 7 + Lokalitätsterm */
       applyAIResult(r, reqId, null, null, null);
     }, 50);
+  }
+}
+
+/* ═══ SGF-Export ═══
+   Brücke zur externen Analyse: erzeugte Dateien lassen sich in Sabaki,
+   Lizzie oder direkt von KataGo bewerten — damit gibt es endlich eine
+   unabhängige Referenz für Zugqualität statt nur Engine-gegen-Engine.
+   Koordinaten: unser y=0 ist die oberste Reihe (coordToLabel nutzt SIZE-y),
+   SGF-Zeile 'a' ebenfalls → direkte Abbildung, kein Spiegeln.
+   Gegenprobe: Q16 = x15,y3 → "pd", der Standard-SGF-Eröffnungszug. */
+function buildSGF() {
+  const L = i => String.fromCharCode(97 + i);          // 0..18 → a..s
+  const esc = t => String(t).replace(/([\]\\])/g, '\\$1');
+  const rules = state.scoringMode === 'territory' ? 'Japanese' : 'Chinese';
+  const d = new Date();
+  const dt = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+
+  let pb = 'Schwarz', pw = 'Weiß';
+  if (state.aiEnabled) {
+    const tag = `KI (${state.aiDifficulty})`;
+    if (state.aiColor === 1) pb = tag; else pw = tag;
+  }
+
+  let head = `(;GM[1]FF[4]CA[UTF-8]AP[Go-Dashboard]SZ[${SIZE}]KM[${KOMI}]RU[${rules}]`
+           + `PB[${esc(pb)}]PW[${esc(pw)}]DT[${dt}]`;
+
+  if (state.gameOver) {
+    let sb, sw;
+    if (state.scoringMode === 'territory') { const t = finalTerritoryScore(); sb = t[1]; sw = t[2] + KOMI; }
+    else { const a = finalAreaScore(); sb = a[1]; sw = a[2] + KOMI; }
+    const diff = Math.abs(sb - sw).toFixed(1);
+    head += `RE[${sb > sw ? 'B' : 'W'}+${diff}]`;
+  }
+
+  let body = '';
+  for (const m of state.sgfMoves) {
+    const c = m.c === 1 ? 'B' : 'W';
+    body += m.pass ? `;${c}[]` : `;${c}[${L(m.x)}${L(m.y)}]`;
+  }
+  return head + '\n' + body + ')\n';
+}
+
+function downloadSGF() {
+  if (!state.sgfMoves.length) { updateUI('Noch keine Züge zum Exportieren.'); return; }
+  try {
+    const blob = new Blob([buildSGF()], {type: 'application/x-go-sgf'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `go_${state.sgfMoves.length}zuege_${Date.now()}.sgf`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (e) {
+    console.warn('[SGF] Download fehlgeschlagen, Fallback Zwischenablage:', e);
+    const t = document.createElement('textarea');
+    t.value = buildSGF(); t.style.cssText = 'position:fixed;opacity:0';
+    document.body.appendChild(t); t.select();
+    try { document.execCommand('copy'); updateUI('SGF in Zwischenablage kopiert.'); } catch (e2) {}
+    document.body.removeChild(t);
   }
 }
 
@@ -2245,6 +2361,7 @@ function copyWithFeedback(text, btnId, idleLabel) {
   });
 }
 
+document.getElementById('btn-sgf').addEventListener('click', downloadSGF);
 document.getElementById('btn-copy-log').addEventListener('click', () => {
   copyWithFeedback(state.log.join('\n'), 'btn-copy-log', '📋');
 });
@@ -2785,6 +2902,12 @@ globalThis.policyNet = new PolicyNet();
          tip:'Ab so vielen freien Feldern beginnt die Verlängerung (stufenlos, kein harter Sprung)'},
         {key:'adaptiveBudgetMaxFactor', label:'Max-Faktor', step:0.1, min:1, max:5, float:true,
          tip:'Obergrenze bei komplett vollem Brett, z.B. 2.5 = bis zu 2.5× Basis-Zeit'},
+        {key:'mctsPriorSharp', label:'Prior-Schärfe', step:1, min:0, max:12, main:true,
+         tip:'⭐ Softmax über Heuristik-Scores statt Rang. Gemessener Best-Move-Anteil: 0→25%, 3→43%, 8→75%. 0 = alter Rang-Prior, der die Scores verwarf.'},
+        {key:'localityBonus', label:'Lokalität', step:50, min:0, max:600, main:true,
+         tip:'⭐ EXPERIMENTELL. Bonus für Züge nahe dem letzten Gegnerzug. Gemessen: bis 200 wirkungslos, ab 400 nur noch reaktiv. Default 0 = aus. Braucht A/B-Test.'},
+        {key:'localityRadius', label:'Lokal-Radius', step:1, min:1, max:9,
+         tip:'Chebyshev-Radius um den letzten Gegnerzug, linear abfallend'},
         {key:'adaptiveBudgetTargetMinSims', label:'Ziel-Min-Sims', step:10, min:20, max:300, main:true,
          tip:'⭐ HAUPTHEBEL. Direkte Messkorrektur — wenn letzter Zug weniger Sims schaffte, wird automatisch mehr Zeit gegeben, unabhängig von der Ursache (Randkampf, große Gruppen etc.)'},
         {key:'rolloutSample',     label:'Rollout-Sample',   step:8,   min:0,   max:200,
