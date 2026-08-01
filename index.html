@@ -300,6 +300,153 @@ function findEyes(board, group, color) {
   return eyes;
 }
 
+/* ═══ Benson-Analyse: bewiesenes Leben, bewiesener Tod ═══════════════
+   Benson (1976): Eine Menge von Ketten ist bedingungslos lebendig
+   (pass-alive) — unfangbar, selbst wenn der Besitzer nie wieder zieht —
+   genau dann, wenn jede Kette mindestens zwei »vitale« Regionen hat.
+   Eine Region (maximal zusammenhängende Nicht-color-Punkte) ist vital
+   für Kette k, wenn JEDER leere Punkt der Region Freiheit von k ist.
+   Iteration bis zum Fixpunkt: Ketten mit <2 vitalen Regionen fliegen
+   raus, Regionen mit rausgeflogenen Randketten ebenfalls.
+
+   WICHTIG: Benson beweist nur EINE Richtung. Was übrig bleibt, ist
+   nicht »tot«, sondern UNKLAR — eine Gruppe kann quicklebendig sein,
+   ohne pass-alive zu sein. Daraus folgt die dreiwertige Klassifikation:
+     · pass-alive                     → bewiesen lebendig
+     · Gegner in kleiner Region, die  → bewiesen tot (kann nie ein Auge
+       nur an pass-alive-Ketten grenzt  bilden: jeder leere Punkt grenzt
+                                        dauerhaft an einen unfangbaren Stein)
+     · alles andere                   → unklar, Heuristik entscheidet
+   Grundsatz wie beim Ladder-Solver: niemals raten — Bewiesenes exakt,
+   der Rest bleibt bei der bestehenden Heuristik. Klassifiziert werden
+   GRUPPEN (Ketten), nicht Punkte; die Punkt-Arrays unten sind nur die
+   Ablage des Ketten-Status.
+
+   bensonClassify(board) stempelt epochenbasiert (kein fill nötig):
+     _bnAlive[i] === Rückgabe-Epoche → Stein i gehört zu pass-alive-Kette
+     _bnDead[i]  === Rückgabe-Epoche → Stein i ist beweisbar tot        */
+const _bnChainId   = new Int32Array(BOARD_SIZE);
+const _bnRegionId  = new Int32Array(BOARD_SIZE);
+const _bnChainMark = new Int32Array(BOARD_SIZE);
+const _bnAlive     = new Int32Array(BOARD_SIZE);
+const _bnDead      = new Int32Array(BOARD_SIZE);
+const _bnAdjTmp    = [0, 0, 0, 0];
+let _bnEpoch = 0;
+
+function _bensonForColor(board, color, epoch) {
+  const opp = color === 1 ? 2 : 1;
+  _bnChainId.fill(-1);
+  _bnRegionId.fill(-1);
+  _bnChainMark.fill(-1);
+
+  /* 1. Ketten der Farbe labeln */
+  let chainCount = 0;
+  for (let i = 0; i < BOARD_SIZE; i++) {
+    if (board[i] !== color || _bnChainId[i] !== -1) continue;
+    let head = 0, tail = 0;
+    _groupQueue[tail++] = i; _bnChainId[i] = chainCount;
+    while (head < tail) {
+      const g = _groupQueue[head++];
+      for (const n of NEIGHBORS[g])
+        if (board[n] === color && _bnChainId[n] === -1) { _bnChainId[n] = chainCount; _groupQueue[tail++] = n; }
+    }
+    chainCount++;
+  }
+  if (!chainCount) return;
+
+  /* 2. Regionen labeln + Metadaten in einem Durchlauf:
+     vitalChains  = Schnittmenge der angrenzenden Ketten über alle LEEREN
+                    Punkte (≤4 Kandidaten nach dem ersten Punkt → billig)
+     borderChains = alle angrenzenden Ketten (dedupliziert via _bnChainMark)
+     small        = jeder leere Punkt grenzt an mindestens eine Kette     */
+  const vitalChains = [], borderChains = [], regionSmall = [];
+  let regionCount = 0;
+  for (let i = 0; i < BOARD_SIZE; i++) {
+    if (board[i] === color || _bnRegionId[i] !== -1) continue;
+    const r = regionCount++;
+    let head = 0, tail = 0;
+    _groupQueue[tail++] = i; _bnRegionId[i] = r;
+    let vital = null;                 /* null = noch kein leerer Punkt gesehen */
+    const border = [];
+    let small = true, hasEmpty = false;
+    while (head < tail) {
+      const p = _groupQueue[head++];
+      let adjCount = 0;
+      for (const n of NEIGHBORS[p]) {
+        const c = board[n];
+        if (c === color) {
+          const k = _bnChainId[n];
+          _bnAdjTmp[adjCount++] = k;
+          if (_bnChainMark[k] !== r) { _bnChainMark[k] = r; border.push(k); }
+        } else if (_bnRegionId[n] === -1) {
+          _bnRegionId[n] = r; _groupQueue[tail++] = n;
+        }
+      }
+      if (board[p] === 0) {
+        hasEmpty = true;
+        if (adjCount === 0) { small = false; vital = []; }   /* leerer Punkt ohne Ketten-Nachbar → für niemanden vital */
+        else if (vital === null) {
+          vital = [];
+          for (let a = 0; a < adjCount; a++) if (vital.indexOf(_bnAdjTmp[a]) < 0) vital.push(_bnAdjTmp[a]);
+        } else if (vital.length) {
+          for (let v = vital.length - 1; v >= 0; v--) {
+            let found = false;
+            for (let a = 0; a < adjCount; a++) if (_bnAdjTmp[a] === vital[v]) { found = true; break; }
+            if (!found) vital.splice(v, 1);
+          }
+        }
+      }
+    }
+    vitalChains.push(hasEmpty && vital ? vital : []);
+    borderChains.push(border);
+    regionSmall.push(small && hasEmpty);
+  }
+
+  /* 3. Benson-Fixpunkt als Kill-Kaskade: Kette stirbt → ihre Randregionen
+     werden ungültig → deren Vitalitäts-Zählungen sinken → weitere Ketten
+     sterben. Äquivalent zur iterativen Formulierung, aber ein Durchlauf. */
+  const vitalCount  = new Int32Array(chainCount);
+  const chainAlive  = new Uint8Array(chainCount).fill(1);
+  const regionAlive = new Uint8Array(regionCount).fill(1);
+  const borderOf = new Array(chainCount);
+  for (let k = 0; k < chainCount; k++) borderOf[k] = [];
+  for (let r = 0; r < regionCount; r++) {
+    for (const k of vitalChains[r]) vitalCount[k]++;
+    for (const k of borderChains[r]) borderOf[k].push(r);
+  }
+  const killQ = [];
+  for (let k = 0; k < chainCount; k++) if (vitalCount[k] < 2) { chainAlive[k] = 0; killQ.push(k); }
+  while (killQ.length) {
+    const k = killQ.pop();
+    for (const r of borderOf[k]) {
+      if (!regionAlive[r]) continue;
+      regionAlive[r] = 0;
+      for (const j of vitalChains[r])
+        if (chainAlive[j] && --vitalCount[j] < 2) { chainAlive[j] = 0; killQ.push(j); }
+    }
+  }
+
+  /* 4. Ergebnis stempeln. Tot = Gegnerstein in einer KLEINEN Region, die
+     überlebt hat (alle Randketten pass-alive): dort kann nie ein Auge
+     entstehen, weil jeder leere Punkt dauerhaft an einem unfangbaren
+     Stein liegt. Regionen ohne Randketten (offene Fläche) zählen nie. */
+  for (let i = 0; i < BOARD_SIZE; i++) {
+    if (board[i] === color) {
+      if (chainAlive[_bnChainId[i]]) _bnAlive[i] = epoch;
+    } else if (board[i] === opp) {
+      const r = _bnRegionId[i];
+      if (regionAlive[r] && regionSmall[r] && borderChains[r].length) _bnDead[i] = epoch;
+    }
+  }
+}
+
+function bensonClassify(board) {
+  const epoch = ++_bnEpoch;
+  _bensonForColor(board, 1, epoch);
+  _bensonForColor(board, 2, epoch);
+  return epoch;
+}
+
 function coordToLabel(x, y) { return `${COL_LETTERS[x]}${SIZE-y}`; }
 </script>
 <script id="worker-ai">
@@ -418,6 +565,11 @@ globalThis.PARAMS = {
      Direkte Messung der letzten Simulation korrigiert das unabhängig
      von der Ursache — reagiert auf JEDE Verlangsamung, egal woher. */
   adaptiveBudgetTargetMinSims: 80,   // Ziel-Mindest-Sims fürs nächste Mal
+  /* Benson-Ebene in evaluateBoard: bewiesen tote Gruppen zählen 0.
+     MaxEmpty gated die Analyse auf Bretter, wo sie etwas beweisen kann —
+     früh gibt es keine pass-alive-Ketten, da wäre sie reiner Overhead. */
+  bensonEval: 1,
+  bensonEvalMaxEmpty: 160,
 };
 globalThis.PARAMS_DEFAULT = Object.freeze({...PARAMS});
 
@@ -858,9 +1010,31 @@ const _evalBoardSeen = new Int32Array(BOARD_SIZE);
 function evaluateBoard(board, color, captures) {
   const opp = color === 1 ? 2 : 1;
   let s = ((captures[color]||0) - (captures[opp]||0)) * 20;
+  /* Benson-Ebene: beweisbar tote Gruppen zählen 0 statt Größe×5+Frei×3 —
+     genau der Term, der im Spätspiel den Q-Kollaps produziert, wenn tote
+     Klumpen als lebendiges Material gewertet werden. Gate über die Zahl
+     freier Felder: früh gibt es ohnehin keine pass-alive-Ketten, und die
+     Analyse pro Simulation soll den Perf-Refactor nicht wieder auffressen. */
+  let bEpoch = -1;
+  if (PARAMS.bensonEval >= 1) {
+    let empt = 0;
+    for (let i = 0; i < BOARD_SIZE; i++) if (!board[i]) empt++;
+    if (empt <= PARAMS.bensonEvalMaxEmpty) bEpoch = bensonClassify(board);
+  }
   const seenEpoch = ++_ffEpoch;
   for (let i = 0; i < BOARD_SIZE; i++) {
     const c = board[i]; if (!c || _evalBoardSeen[i] === seenEpoch) continue;
+    if (bEpoch >= 0 && _bnDead[i] === bEpoch) {
+      /* ganze Kette beweisbar tot → zählt 0; nur als gesehen markieren */
+      let head = 0, tail = 0;
+      _groupQueue[tail++] = i; _evalBoardSeen[i] = seenEpoch;
+      while (head < tail) {
+        const g = _groupQueue[head++];
+        for (const n of NEIGHBORS[g])
+          if (board[n] === c && _evalBoardSeen[n] !== seenEpoch) { _evalBoardSeen[n] = seenEpoch; _groupQueue[tail++] = n; }
+      }
+      continue;
+    }
     const libEpoch = ++_ffEpoch;
     let head = 0, tail = 0, size = 0, libs = 0;
     _groupQueue[tail++] = i; _evalBoardSeen[i] = seenEpoch;
@@ -1399,12 +1573,23 @@ function resetGame() {
 
 function resolveLifeAndDeath() {
   state.deadStones = new Set();
+  /* Benson zuerst: Bewiesenes wird exakt behandelt, NUR der unklare Rest
+     geht weiter durch die Freiheiten/Augen-Heuristik. Pass-alive-Ketten
+     können nie fälschlich entfernt werden, bewiesen tote Gegner in
+     pass-alive-Gebiet werden garantiert entfernt — die Heuristik kann
+     das Ergebnis nur noch für unklare Gruppen beeinflussen. */
+  const bEpoch = bensonClassify(state.board);
   const processed = new Uint8Array(BOARD_SIZE);
   for (let i = 0; i < BOARD_SIZE; i++) {
     const color = state.board[i];
     if (!color || processed[i]) continue;
     const {group, liberties} = floodFill(state.board, i);
     for (const g of group) processed[g] = 1;
+    if (_bnAlive[i] === bEpoch) continue;                                   /* bewiesen lebendig */
+    if (_bnDead[i] === bEpoch) {                                            /* bewiesen tot */
+      for (const g of group) state.deadStones.add(g);
+      continue;
+    }
     if (liberties.length >= 5) continue;
     const eyes = findEyes(state.board, group, color);
     if (eyes.length >= 2) continue;
