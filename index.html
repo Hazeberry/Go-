@@ -98,7 +98,10 @@
     <div class="panel">
       <div class="panel-title" style="display:flex;justify-content:space-between;align-items:center;">
         <span>Zugprotokoll</span>
-        <button id="btn-copy-log" style="font-size:.55rem;padding:2px 8px;font-family:'Noto Sans Mono',monospace;background:transparent;color:var(--ui-dim);border:1px solid var(--ui-border);border-radius:2px;cursor:pointer;letter-spacing:.05em;" title="Protokoll kopieren">📋</button>
+        <span>
+          <button id="btn-copy-log" style="font-size:.55rem;padding:2px 8px;font-family:'Noto Sans Mono',monospace;background:transparent;color:var(--ui-dim);border:1px solid var(--ui-border);border-radius:2px;cursor:pointer;letter-spacing:.05em;" title="Protokoll kopieren">📋</button>
+          <button id="btn-bug-report" style="font-size:.55rem;padding:2px 8px;font-family:'Noto Sans Mono',monospace;background:transparent;color:var(--ui-dim);border:1px solid var(--ui-border);border-radius:2px;cursor:pointer;letter-spacing:.05em;" title="Bug-Report kopieren (Protokoll + Brettzustand + KI-Diagnose)">🐞</button>
+        </span>
       </div>
       <div id="log"></div>
     </div>
@@ -109,7 +112,7 @@
 const SIZE = 19;
 const BOARD_SIZE = SIZE * SIZE;
 const COL_LETTERS = 'ABCDEFGHJKLMNOPQRST';
-const HOSHI_XY = [[3,3],[9,3],[15,3],[3,9],[9,9],[15,9],[3,15],[9,15],[15,15]];
+const HOSHI_XY = [[3,3],[9,3],[15,3],[3,9],[9,9],[3,15],[9,15],[15,15]];
 const HOSHI_IDX = new Set(HOSHI_XY.map(([x,y]) => y * SIZE + x));
 
 function idx(x, y) { return y * SIZE + x; }
@@ -176,20 +179,84 @@ function floodFill(board, startIdx) {
   return { group, liberties };
 }
 
+/* ═══ estimateArea-Perf-Refactor: allokationsfreie Gruppen-Primitiven ═══
+   Messung (Partie vom 16.7., 205 Züge nachgespielt): ms/Sim stieg vom
+   frühen Spiel bis Zug 205 um ×11,7 — auf Desktop-CPU genauso wie auf dem
+   Telefon, also Code, nicht Hardware. Ursache: floodFill baut bei JEDEM
+   Aufruf group- und liberties-Arrays, aber fast alle heißen Aufrufer
+   (Legalitätsprüfung, quickEval, evaluateBoard) brauchen nur eine ZAHL —
+   meist nur »hat die Gruppe überhaupt eine Freiheit?«. Bei den großen
+   zusammenhängenden Spätspiel-Gruppen heißt das: kompletter Gruppen-Walk
+   plus zwei Array-Allokationen pro Kandidat, wo ein Abbruch bei der
+   ersten gefundenen Freiheit reichen würde.
+
+   countLiberties zählt Freiheiten ohne jede Allokation und bricht ab,
+   sobald `cap` Freiheiten gefunden sind: cap=1 → »lebt?«, cap=2 → »Atari?«,
+   cap=3 → »≤2 Freiheiten?«. floodFill bleibt für die Aufrufer bestehen,
+   die wirklich die Zellenlisten brauchen (buildCrisisMap, findEyes, UI). */
+const _groupQueue = new Int32Array(BOARD_SIZE);
+
+function countLiberties(board, startIdx, cap) {
+  const color = board[startIdx];
+  const limit = cap === undefined ? 0x7fffffff : cap;
+  const epoch = ++_ffEpoch;
+  let head = 0, tail = 0, libs = 0;
+  _groupQueue[tail++] = startIdx;
+  _ffVisited[startIdx] = epoch;
+  while (head < tail) {
+    const i = _groupQueue[head++];
+    for (const n of NEIGHBORS[i]) {
+      if (_ffVisited[n] === epoch) continue;
+      _ffVisited[n] = epoch;
+      const c = board[n];
+      if (c === 0) { if (++libs >= limit) return libs; }
+      else if (c === color) _groupQueue[tail++] = n;
+    }
+  }
+  return libs;
+}
+
+/* Entfernt eine als tot ERKANNTE Gruppe (0 Freiheiten, vom Aufrufer
+   geprüft). board[g]=0 dient dabei selbst als Besucht-Marker. */
+function _removeDeadGroup(board, startIdx) {
+  const color = board[startIdx];
+  let head = 0, tail = 0, removed = 1;
+  _groupQueue[tail++] = startIdx; board[startIdx] = 0;
+  while (head < tail) {
+    const g = _groupQueue[head++];
+    for (const n of NEIGHBORS[g])
+      if (board[n] === color) { board[n] = 0; _groupQueue[tail++] = n; removed++; }
+  }
+  return removed;
+}
+
 const _rdgChecked = new Int32Array(BOARD_SIZE);
 
 function removeDeadGroups(board, color, nearIdx) {
   const epoch = ++_ffEpoch;
   let captured = 0;
-  const cells = (nearIdx !== undefined)
-    ? NEIGHBORS[nearIdx].filter(n => board[n] === color)
-    : (() => { const r = []; for (let i = 0; i < BOARD_SIZE; i++) if (board[i] === color) r.push(i); return r; })();
-  for (const i of cells) {
-    if (board[i] !== color || _rdgChecked[i] === epoch) continue;
-    const {group, liberties} = floodFill(board, i);
-    for (const g of group) _rdgChecked[g] = epoch;
-    if (liberties.length === 0)
-      for (const g of group) { board[g] = 0; captured++; }
+  if (nearIdx !== undefined) {
+    /* Heißer Pfad (pro Kandidat/Rollout-Ply): lebende Nachbargruppen kosten
+       nur noch einen Early-Exit-Scan, keine Arrays. Das _rdgChecked-Dedupe
+       markiert nur den Startstein — trifft ein zweiter Nachbar dieselbe
+       lebende Gruppe, kostet das einen weiteren billigen Scan, mehr nicht. */
+    for (const n of NEIGHBORS[nearIdx]) {
+      if (board[n] !== color || _rdgChecked[n] === epoch) continue;
+      _rdgChecked[n] = epoch;
+      if (countLiberties(board, n, 1) > 0) continue;
+      captured += _removeDeadGroup(board, n);
+    }
+  } else {
+    /* Ganzes-Brett-Variante (selten: Scoring/UI): floodFill markiert die
+       komplette Gruppe als geprüft — sonst würde jeder Stein einer großen
+       lebenden Gruppe einen eigenen Scan auslösen (O(Gruppe²)). */
+    for (let i = 0; i < BOARD_SIZE; i++) {
+      if (board[i] !== color || _rdgChecked[i] === epoch) continue;
+      const {group, liberties} = floodFill(board, i);
+      for (const g of group) _rdgChecked[g] = epoch;
+      if (liberties.length === 0)
+        for (const g of group) { board[g] = 0; captured++; }
+    }
   }
   return captured;
 }
@@ -233,6 +300,153 @@ function findEyes(board, group, color) {
       eyes.push(candIdx);
   }
   return eyes;
+}
+
+/* ═══ Benson-Analyse: bewiesenes Leben, bewiesener Tod ═══════════════
+   Benson (1976): Eine Menge von Ketten ist bedingungslos lebendig
+   (pass-alive) — unfangbar, selbst wenn der Besitzer nie wieder zieht —
+   genau dann, wenn jede Kette mindestens zwei »vitale« Regionen hat.
+   Eine Region (maximal zusammenhängende Nicht-color-Punkte) ist vital
+   für Kette k, wenn JEDER leere Punkt der Region Freiheit von k ist.
+   Iteration bis zum Fixpunkt: Ketten mit <2 vitalen Regionen fliegen
+   raus, Regionen mit rausgeflogenen Randketten ebenfalls.
+
+   WICHTIG: Benson beweist nur EINE Richtung. Was übrig bleibt, ist
+   nicht »tot«, sondern UNKLAR — eine Gruppe kann quicklebendig sein,
+   ohne pass-alive zu sein. Daraus folgt die dreiwertige Klassifikation:
+     · pass-alive                     → bewiesen lebendig
+     · Gegner in kleiner Region, die  → bewiesen tot (kann nie ein Auge
+       nur an pass-alive-Ketten grenzt  bilden: jeder leere Punkt grenzt
+                                        dauerhaft an einen unfangbaren Stein)
+     · alles andere                   → unklar, Heuristik entscheidet
+   Grundsatz wie beim Ladder-Solver: niemals raten — Bewiesenes exakt,
+   der Rest bleibt bei der bestehenden Heuristik. Klassifiziert werden
+   GRUPPEN (Ketten), nicht Punkte; die Punkt-Arrays unten sind nur die
+   Ablage des Ketten-Status.
+
+   bensonClassify(board) stempelt epochenbasiert (kein fill nötig):
+     _bnAlive[i] === Rückgabe-Epoche → Stein i gehört zu pass-alive-Kette
+     _bnDead[i]  === Rückgabe-Epoche → Stein i ist beweisbar tot        */
+const _bnChainId   = new Int32Array(BOARD_SIZE);
+const _bnRegionId  = new Int32Array(BOARD_SIZE);
+const _bnChainMark = new Int32Array(BOARD_SIZE);
+const _bnAlive     = new Int32Array(BOARD_SIZE);
+const _bnDead      = new Int32Array(BOARD_SIZE);
+const _bnAdjTmp    = [0, 0, 0, 0];
+let _bnEpoch = 0;
+
+function _bensonForColor(board, color, epoch) {
+  const opp = color === 1 ? 2 : 1;
+  _bnChainId.fill(-1);
+  _bnRegionId.fill(-1);
+  _bnChainMark.fill(-1);
+
+  /* 1. Ketten der Farbe labeln */
+  let chainCount = 0;
+  for (let i = 0; i < BOARD_SIZE; i++) {
+    if (board[i] !== color || _bnChainId[i] !== -1) continue;
+    let head = 0, tail = 0;
+    _groupQueue[tail++] = i; _bnChainId[i] = chainCount;
+    while (head < tail) {
+      const g = _groupQueue[head++];
+      for (const n of NEIGHBORS[g])
+        if (board[n] === color && _bnChainId[n] === -1) { _bnChainId[n] = chainCount; _groupQueue[tail++] = n; }
+    }
+    chainCount++;
+  }
+  if (!chainCount) return;
+
+  /* 2. Regionen labeln + Metadaten in einem Durchlauf:
+     vitalChains  = Schnittmenge der angrenzenden Ketten über alle LEEREN
+                    Punkte (≤4 Kandidaten nach dem ersten Punkt → billig)
+     borderChains = alle angrenzenden Ketten (dedupliziert via _bnChainMark)
+     small        = jeder leere Punkt grenzt an mindestens eine Kette     */
+  const vitalChains = [], borderChains = [], regionSmall = [];
+  let regionCount = 0;
+  for (let i = 0; i < BOARD_SIZE; i++) {
+    if (board[i] === color || _bnRegionId[i] !== -1) continue;
+    const r = regionCount++;
+    let head = 0, tail = 0;
+    _groupQueue[tail++] = i; _bnRegionId[i] = r;
+    let vital = null;                 /* null = noch kein leerer Punkt gesehen */
+    const border = [];
+    let small = true, hasEmpty = false;
+    while (head < tail) {
+      const p = _groupQueue[head++];
+      let adjCount = 0;
+      for (const n of NEIGHBORS[p]) {
+        const c = board[n];
+        if (c === color) {
+          const k = _bnChainId[n];
+          _bnAdjTmp[adjCount++] = k;
+          if (_bnChainMark[k] !== r) { _bnChainMark[k] = r; border.push(k); }
+        } else if (_bnRegionId[n] === -1) {
+          _bnRegionId[n] = r; _groupQueue[tail++] = n;
+        }
+      }
+      if (board[p] === 0) {
+        hasEmpty = true;
+        if (adjCount === 0) { small = false; vital = []; }   /* leerer Punkt ohne Ketten-Nachbar → für niemanden vital */
+        else if (vital === null) {
+          vital = [];
+          for (let a = 0; a < adjCount; a++) if (vital.indexOf(_bnAdjTmp[a]) < 0) vital.push(_bnAdjTmp[a]);
+        } else if (vital.length) {
+          for (let v = vital.length - 1; v >= 0; v--) {
+            let found = false;
+            for (let a = 0; a < adjCount; a++) if (_bnAdjTmp[a] === vital[v]) { found = true; break; }
+            if (!found) vital.splice(v, 1);
+          }
+        }
+      }
+    }
+    vitalChains.push(hasEmpty && vital ? vital : []);
+    borderChains.push(border);
+    regionSmall.push(small && hasEmpty);
+  }
+
+  /* 3. Benson-Fixpunkt als Kill-Kaskade: Kette stirbt → ihre Randregionen
+     werden ungültig → deren Vitalitäts-Zählungen sinken → weitere Ketten
+     sterben. Äquivalent zur iterativen Formulierung, aber ein Durchlauf. */
+  const vitalCount  = new Int32Array(chainCount);
+  const chainAlive  = new Uint8Array(chainCount).fill(1);
+  const regionAlive = new Uint8Array(regionCount).fill(1);
+  const borderOf = new Array(chainCount);
+  for (let k = 0; k < chainCount; k++) borderOf[k] = [];
+  for (let r = 0; r < regionCount; r++) {
+    for (const k of vitalChains[r]) vitalCount[k]++;
+    for (const k of borderChains[r]) borderOf[k].push(r);
+  }
+  const killQ = [];
+  for (let k = 0; k < chainCount; k++) if (vitalCount[k] < 2) { chainAlive[k] = 0; killQ.push(k); }
+  while (killQ.length) {
+    const k = killQ.pop();
+    for (const r of borderOf[k]) {
+      if (!regionAlive[r]) continue;
+      regionAlive[r] = 0;
+      for (const j of vitalChains[r])
+        if (chainAlive[j] && --vitalCount[j] < 2) { chainAlive[j] = 0; killQ.push(j); }
+    }
+  }
+
+  /* 4. Ergebnis stempeln. Tot = Gegnerstein in einer KLEINEN Region, die
+     überlebt hat (alle Randketten pass-alive): dort kann nie ein Auge
+     entstehen, weil jeder leere Punkt dauerhaft an einem unfangbaren
+     Stein liegt. Regionen ohne Randketten (offene Fläche) zählen nie. */
+  for (let i = 0; i < BOARD_SIZE; i++) {
+    if (board[i] === color) {
+      if (chainAlive[_bnChainId[i]]) _bnAlive[i] = epoch;
+    } else if (board[i] === opp) {
+      const r = _bnRegionId[i];
+      if (regionAlive[r] && regionSmall[r] && borderChains[r].length) _bnDead[i] = epoch;
+    }
+  }
+}
+
+function bensonClassify(board) {
+  const epoch = ++_bnEpoch;
+  _bensonForColor(board, 1, epoch);
+  _bensonForColor(board, 2, epoch);
+  return epoch;
 }
 
 function coordToLabel(x, y) { return `${COL_LETTERS[x]}${SIZE-y}`; }
@@ -353,11 +567,23 @@ globalThis.PARAMS = {
      Direkte Messung der letzten Simulation korrigiert das unabhängig
      von der Ursache — reagiert auf JEDE Verlangsamung, egal woher. */
   adaptiveBudgetTargetMinSims: 80,   // Ziel-Mindest-Sims fürs nächste Mal
+  /* Benson-Ebene in evaluateBoard: bewiesen tote Gruppen zählen 0.
+     MaxEmpty gated die Analyse auf Bretter, wo sie etwas beweisen kann —
+     früh gibt es keine pass-alive-Ketten, da wäre sie reiner Overhead. */
+  bensonEval: 1,
+  bensonEvalMaxEmpty: 160,
 };
 globalThis.PARAMS_DEFAULT = Object.freeze({...PARAMS});
 
 /* Modul-Zustand: letzte gemessene ms/Sim, lebt im Worker zwischen Zügen
-   (Worker-Pool macht's möglich) — dieselbe Technik wie _mctsSavedRoot. */
+   (Worker-Pool macht's möglich) — dieselbe Technik wie _mctsSavedRoot.
+   ACHTUNG Desync-Falle: worker-ai läuft als eigenständiges Script sowohl
+   im Hauptthread als auch im Worker — zwei getrennte JS-Umgebungen mit
+   eigenen Kopien dieser Variable. Der Worker misst, aber der Hauptthread-
+   Watchdog (triggerAIMove) rechnete für immer mit null. Deshalb meldet
+   der Worker seinen Messwert bei jeder Antwort zurück (lastMsPerSim im
+   postMessage), und attachWorkerHandlers übernimmt ihn in die
+   Hauptthread-Kopie — beide Seiten rechnen mit denselben Daten. */
 let _lastMsPerSim = null;
 
 /* Stufenlose Zeitbudget-Skalierung nach freien Feldern ALS BASIS, plus
@@ -398,15 +624,32 @@ function removeDeadGroupsUndoable(board, color, nearIdx) {
   const epoch = ++_ffEpoch;
   let captured = 0;
   const undo = [];
-  const cells = (nearIdx !== undefined)
-    ? NEIGHBORS[nearIdx].filter(n => board[n] === color)
-    : (() => { const r = []; for (let i = 0; i < BOARD_SIZE; i++) if (board[i] === color) r.push(i); return r; })();
-  for (const i of cells) {
-    if (board[i] !== color || _rdgChecked[i] === epoch) continue;
-    const {group, liberties} = floodFill(board, i);
-    for (const g of group) _rdgChecked[g] = epoch;
-    if (liberties.length === 0)
-      for (const g of group) { undo.push({idx:g, oldColor:board[g]}); board[g] = 0; captured++; }
+  if (nearIdx !== undefined) {
+    /* Heißer Pfad (jede Legalitätsprüfung in getLegalMoves/sampleLegalMoves):
+       lebende Gruppen kosten nur den Early-Exit-Scan, s. removeDeadGroups.
+       Tote Gruppen werden per BFS entfernt — das undo-Array dient dabei
+       gleich als Queue, weil die Einträge in BFS-Reihenfolge anfallen und
+       board[g]=0 als Besucht-Marker wirkt. */
+    for (const nb of NEIGHBORS[nearIdx]) {
+      if (board[nb] !== color || _rdgChecked[nb] === epoch) continue;
+      _rdgChecked[nb] = epoch;
+      if (countLiberties(board, nb, 1) > 0) continue;
+      let head = undo.length;
+      undo.push({idx: nb, oldColor: color}); board[nb] = 0; captured++;
+      while (head < undo.length) {
+        const g = undo[head++].idx;
+        for (const n of NEIGHBORS[g])
+          if (board[n] === color) { undo.push({idx: n, oldColor: color}); board[n] = 0; captured++; }
+      }
+    }
+  } else {
+    for (let i = 0; i < BOARD_SIZE; i++) {
+      if (board[i] !== color || _rdgChecked[i] === epoch) continue;
+      const {group, liberties} = floodFill(board, i);
+      for (const g of group) _rdgChecked[g] = epoch;
+      if (liberties.length === 0)
+        for (const g of group) { undo.push({idx:g, oldColor:board[g]}); board[g] = 0; captured++; }
+    }
   }
   return {captured, undo};
 }
@@ -415,7 +658,7 @@ function applyUndo(board, undo) {
   for (let i = undo.length - 1; i >= 0; i--) board[undo[i].idx] = undo[i].oldColor;
 }
 
-function getLegalMoves(board, color, historyHashes, koPoint, deadline) {
+function getLegalMoves(board, color, historyHashes, koPoint, hardDeadline) {
   const opp = color === 1 ? 2 : 1;
   const moves = [];
   /* PERF: Rollouts übergeben ein leeres Hash-Set — dann den teuren
@@ -424,19 +667,21 @@ function getLegalMoves(board, color, historyHashes, koPoint, deadline) {
   const checkSuperko = historyHashes && historyHashes.size > 0;
   const hasKo = koPoint !== null && koPoint !== undefined;
   _legalScratch.set(board);
+  /* hardDeadline: Sicherheitsbremse IN der Kandidatenschleife. Bisher wurde
+     die Deadline nur zwischen Plies/Simulationen geprüft — ein einzelner
+     Scan über 300+ Kandidaten mit floodFill über riesige Gruppen konnte
+     diese Lücke komplett überspringen. Alle 16 Kandidaten prüfen; eine
+     abgeschnittene Liste ist für Rollouts/Expansion okay (heuristisch),
+     Root-Aufrufe übergeben KEINE Deadline und bleiben vollständig. */
+  let _checked = 0;
   for (let i = 0; i < BOARD_SIZE; i++) {
-    /* Sicherheitsbremse (tiefer als hardDeadline): auf Brettern mit sehr
-       großen zusammenhängenden Gruppen kann bereits EIN removeDeadGroups-
-       Aufruf teuer werden. Alle 32 Kandidaten die Zeit prüfen, statt erst
-       nach der kompletten 361-Feld-Schleife — schließt die Lücke, dass
-       eine einzelne teure Kandidatenprüfung alle äußeren Checks umgeht. */
-    if (deadline !== undefined && (i & 31) === 0 && Date.now() > deadline) break;
     if (board[i] !== 0) continue;
     if (hasKo && i === koPoint) continue;   /* Fix 7: 1-Ply-Ko, billig */
+    if (hardDeadline !== undefined && (++_checked & 15) === 0 && Date.now() > hardDeadline) break;
     _legalScratch[i] = color;
     const {captured, undo} = removeDeadGroupsUndoable(_legalScratch, opp, i);
     let legal = true;
-    if (captured === 0 && floodFill(_legalScratch, i).liberties.length === 0) legal = false;
+    if (captured === 0 && countLiberties(_legalScratch, i, 1) === 0) legal = false;
     if (legal && (!checkSuperko || !historyHashes.has(computeZobrist(_legalScratch))))
       moves.push({x: xOf(i), y: yOf(i), idx: i});
     applyUndo(_legalScratch, undo);
@@ -461,9 +706,9 @@ function evalOpening(board, i, color, mc) {
   _evalScratch[i] = color;
   const cap = removeDeadGroups(_evalScratch, opp, i);
   if (cap === 0) {
-    const {liberties} = floodFill(_evalScratch, i);
-    if (liberties.length === 0) s -= 10000;
-    else if (liberties.length === 1) s -= 200;
+    const lib = countLiberties(_evalScratch, i, 2);
+    if (lib === 0) s -= 10000;
+    else if (lib === 1) s -= 200;
   } else s += cap * PARAMS.openCapBonus;
   let ownNbr = 0;
   for (const n of NEIGHBORS[i]) if (board[n] === color) ownNbr++;
@@ -489,11 +734,11 @@ function evalMidgame(board, i, color, mc) {
     const c = board[n];
     if (c === color) {
       on++;
-      const info = floodFill(board, n);
-      if (info.liberties.length === 1) s += PARAMS.midRescueAtari;
-      if (info.liberties.length === 2) s += PARAMS.midRescue2Lib;
+      const l = countLiberties(board, n, 3);
+      if (l === 1) s += PARAMS.midRescueAtari;
+      if (l === 2) s += PARAMS.midRescue2Lib;
     } else if (c === opp) {
-      const l = floodFill(board, n).liberties.length;
+      const l = countLiberties(board, n, 4);
       if (l === 1) s += PARAMS.midOppAtari;
       if (l === 2) s += PARAMS.midOpp2Lib;
       if (l === 3) s += PARAMS.midOpp3Lib;
@@ -510,13 +755,17 @@ function evalMidgame(board, i, color, mc) {
     if (sec) s += PARAMS.midSafeBonus;
   }
   for (const n of NEIGHBORS[i])
-    if (_evalScratch[n] === opp && floodFill(_evalScratch, n).liberties.length === 1) s += PARAMS.midOppAtariNear;
+    if (_evalScratch[n] === opp && countLiberties(_evalScratch, n, 2) === 1) s += PARAMS.midOppAtariNear;
   return s + Math.random() * 4;
 }
 
 const _areaVisited = new Int32Array(BOARD_SIZE);
 let   _areaEpoch   = 0;
 
+/* Perf-Refactor: Regionen werden nur noch GEZÄHLT (size), nicht mehr als
+   Array gesammelt — die queue-/region-Allokationen pro Region entfallen.
+   _groupQueue aus shared-go-logic ist hier frei (keine Verschachtelung
+   mit countLiberties/_removeDeadGroup — estimateArea ruft nichts davon). */
 function estimateArea(board, color) {
   const opp = color === 1 ? 2 : 1;
   let area = 0;
@@ -526,20 +775,20 @@ function estimateArea(board, color) {
     if (c === color) { area++; continue; }
     if (c === opp)   continue;
     if (_areaVisited[i] === epoch) continue;
-    let head = 0; const queue = [i]; _areaVisited[i] = epoch;
-    const region = [i];
+    let head = 0, tail = 0, size = 0;
+    _groupQueue[tail++] = i; _areaVisited[i] = epoch;
     let touchesOwn = false, touchesOpp = false;
-    while (head < queue.length) {
-      const cur = queue[head++];
+    while (head < tail) {
+      const cur = _groupQueue[head++]; size++;
       for (const n of NEIGHBORS[cur]) {
         const cc = board[n];
         if (cc === 0) {
-          if (_areaVisited[n] !== epoch) { _areaVisited[n] = epoch; queue.push(n); region.push(n); }
+          if (_areaVisited[n] !== epoch) { _areaVisited[n] = epoch; _groupQueue[tail++] = n; }
         } else if (cc === color) touchesOwn = true;
         else touchesOpp = true;
       }
     }
-    if (touchesOwn && !touchesOpp) area += region.length;
+    if (touchesOwn && !touchesOpp) area += size;
   }
   return area;
 }
@@ -567,8 +816,7 @@ function evalEndgame(board, i, color, mc) {
   _evalScratch.set(board);
   _evalScratch[i] = color;
   const cap = removeDeadGroups(_evalScratch, opp, i);
-  const own = floodFill(_evalScratch, i);
-  const lib = own.liberties.length;
+  const lib = countLiberties(_evalScratch, i, 2);
   if (lib === 0 && cap === 0) return -10000 + Math.random();
   const areaAfter = estimateArea(_evalScratch, color);
   const oppAfter  = estimateArea(_evalScratch, opp);
@@ -578,7 +826,7 @@ function evalEndgame(board, i, color, mc) {
   s += cap * PARAMS.endCapBonus;
   if (lib === 1 && cap === 0) s -= PARAMS.endAtariPenalty;
   for (const n of NEIGHBORS[i]) {
-    if (board[n] === opp && floodFill(board, n).liberties.length === 1) s += PARAMS.endOppAtari;
+    if (board[n] === opp && countLiberties(board, n, 2) === 1) s += PARAMS.endOppAtari;
   }
   return s + Math.random() * 0.5;
 }
@@ -627,7 +875,7 @@ function evalNakade(boardBefore, boardAfter, i, opp) {
     if (!before.liberties.includes(i)) continue;
     const libsBefore = before.liberties.length;
     if (boardAfter[n] !== opp) { bonus += 1200; continue; }
-    const libsAfter = floodFill(boardAfter, n).liberties.length;
+    const libsAfter = countLiberties(boardAfter, n, 3);
     if      (libsAfter === 0)                          bonus += 1200;
     else if (libsAfter === 1)                          bonus += 700;
     else if (libsAfter === 2 && libsBefore <= 3)       bonus += 250;
@@ -648,15 +896,15 @@ function evalTsumego(board, i, color, mc) {
   s += cap * PARAMS.tsumegoCapBonus;
   for (const n of NEIGHBORS[i]) {
     if (_tsumegoScratch[n] !== opp) continue;
-    const l = floodFill(_tsumegoScratch, n).liberties.length;
+    const l = countLiberties(_tsumegoScratch, n, 3);
     if (l === 1) s += PARAMS.tsumegoAtariSet;
     else if (l === 2) s += PARAMS.tsumego2Lib;
   }
   for (const n of NEIGHBORS[i]) {
     if (board[n] !== color) continue;
-    const before = floodFill(board, n).liberties.length;
+    const before = countLiberties(board, n, 3);
     if (before <= 2) {
-      const after = floodFill(_tsumegoScratch, n).liberties.length;
+      const after = countLiberties(_tsumegoScratch, n, 3);
       if (before === 1) {
         if      (after >= 3) s += PARAMS.tsumegoRescue3;
         else if (after === 2) s += PARAMS.tsumegoRescue2;
@@ -692,8 +940,8 @@ function evalTsumego(board, i, color, mc) {
   s += evalNakade(board, _tsumegoScratch, i, opp) * PARAMS.tsumegoNakade;
   for (const n of NEIGHBORS[i]) {
     if (board[n] !== color) continue;
-    const before = floodFill(board, n).liberties.length;
-    const after  = floodFill(_tsumegoScratch, n).liberties.length;
+    const before = countLiberties(board, n, 2);
+    const after  = countLiberties(_tsumegoScratch, n, 2);
     if (after === 1 && before > 1) s -= PARAMS.tsumegoWeaken;
   }
   return s * safetyMul + Math.random() * 3;
@@ -738,34 +986,72 @@ function evaluateMove(board, i, color, mc, emptyFields) {
 function quickEval(board, i, color) {
   const opp = color === 1 ? 2 : 1;
   let score = 0, free = 0, oppN = 0, ownN = 0;
+  /* countLiberties mit Cap statt floodFill: läuft pro Rollout-Kandidat und
+     pro MCTS-Expansions-Kind — die Arrays hier waren der heißeste Müll. */
   for (const n of NEIGHBORS[i]) {
     const c = board[n];
     if (c === 0) free++;
-    else if (c === opp) { oppN++; if (floodFill(board, n).liberties.length === 1) score += 200; }
-    else { ownN++; if (floodFill(board, n).liberties.length <= 2) score += 80; }
+    else if (c === opp) { oppN++; if (countLiberties(board, n, 2) === 1) score += 200; }
+    else { ownN++; if (countLiberties(board, n, 3) <= 2) score += 80; }
   }
   _quickScratch.set(board);
   _quickScratch[i] = color;
   const cap = removeDeadGroups(_quickScratch, opp, i);
   score += cap * 500;
-  const selfLib = floodFill(_quickScratch, i).liberties.length;
+  const selfLib = countLiberties(_quickScratch, i, 2);
   if (selfLib === 1 && cap === 0) score -= 300;
   return score + free*40 + oppN*20 + ownN*15 + Math.random()*5;
 }
 
-/* Fix #3: evaluateBoard läuft einmal pro MCTS-Simulation (tausende Male
-   pro Zug). Die Uint8Array-Allokation pro Aufruf erzeugte messbaren
-   GC-Druck — jetzt ein wiederverwendetes Modul-Scratchpad mit fill(0). */
-const _evalBoardSeen = new Uint8Array(BOARD_SIZE);
+/* Fix #3 + Perf-Refactor: evaluateBoard läuft einmal pro MCTS-Simulation
+   (tausende Male pro Zug). Statt floodFill pro Gruppe (zwei Arrays pro
+   Aufruf!) jetzt ein einziger BFS-Durchlauf, der nur ZÄHLT: Gruppengröße
+   direkt, Freiheiten dedupliziert über eine Epochen-Markierung pro Gruppe.
+   Null Allokationen, identisches Ergebnis. */
+const _evalBoardSeen = new Int32Array(BOARD_SIZE);
 function evaluateBoard(board, color, captures) {
   const opp = color === 1 ? 2 : 1;
   let s = ((captures[color]||0) - (captures[opp]||0)) * 20;
-  const seen = _evalBoardSeen; seen.fill(0);
+  /* Benson-Ebene: beweisbar tote Gruppen zählen 0 statt Größe×5+Frei×3 —
+     genau der Term, der im Spätspiel den Q-Kollaps produziert, wenn tote
+     Klumpen als lebendiges Material gewertet werden. Gate über die Zahl
+     freier Felder: früh gibt es ohnehin keine pass-alive-Ketten, und die
+     Analyse pro Simulation soll den Perf-Refactor nicht wieder auffressen. */
+  let bEpoch = -1;
+  if (PARAMS.bensonEval >= 1) {
+    let empt = 0;
+    for (let i = 0; i < BOARD_SIZE; i++) if (!board[i]) empt++;
+    if (empt <= PARAMS.bensonEvalMaxEmpty) bEpoch = bensonClassify(board);
+  }
+  const seenEpoch = ++_ffEpoch;
   for (let i = 0; i < BOARD_SIZE; i++) {
-    const c = board[i]; if (!c || seen[i]) continue;
-    const {group, liberties} = floodFill(board, i);
-    for (const g of group) seen[g] = 1;
-    const v = group.length * 5 + liberties.length * 3;
+    const c = board[i]; if (!c || _evalBoardSeen[i] === seenEpoch) continue;
+    if (bEpoch >= 0 && _bnDead[i] === bEpoch) {
+      /* ganze Kette beweisbar tot → zählt 0; nur als gesehen markieren */
+      let head = 0, tail = 0;
+      _groupQueue[tail++] = i; _evalBoardSeen[i] = seenEpoch;
+      while (head < tail) {
+        const g = _groupQueue[head++];
+        for (const n of NEIGHBORS[g])
+          if (board[n] === c && _evalBoardSeen[n] !== seenEpoch) { _evalBoardSeen[n] = seenEpoch; _groupQueue[tail++] = n; }
+      }
+      continue;
+    }
+    const libEpoch = ++_ffEpoch;
+    let head = 0, tail = 0, size = 0, libs = 0;
+    _groupQueue[tail++] = i; _evalBoardSeen[i] = seenEpoch;
+    while (head < tail) {
+      const g = _groupQueue[head++]; size++;
+      for (const n of NEIGHBORS[g]) {
+        const cc = board[n];
+        if (cc === c) {
+          if (_evalBoardSeen[n] !== seenEpoch) { _evalBoardSeen[n] = seenEpoch; _groupQueue[tail++] = n; }
+        } else if (cc === 0 && _ffVisited[n] !== libEpoch) {
+          _ffVisited[n] = libEpoch; libs++;
+        }
+      }
+    }
+    const v = size * 5 + libs * 3;
     s += (c === color) ? v : -v;
   }
   return s;
@@ -778,7 +1064,7 @@ const _emptyHashes = new Set();
    Ply ~85% der Legalitätsprüfungen. Iteriert geshuffelt weiter, falls
    die ersten Kandidaten illegal sind → Pass-Erkennung bleibt korrekt.
    PARAMS.rolloutSample = 0 stellt das alte Verhalten wieder her. */
-function sampleLegalMoves(board, color, S, koPoint, deadline) {
+function sampleLegalMoves(board, color, S, koPoint, hardDeadline) {
   const empties = [];
   for (let i = 0; i < BOARD_SIZE; i++) if (board[i] === 0) empties.push(i);
   if (!empties.length) return [];
@@ -788,7 +1074,8 @@ function sampleLegalMoves(board, color, S, koPoint, deadline) {
   const hasKo = koPoint !== null && koPoint !== undefined;
   _legalScratch.set(board);
   for (let j = 0; j < empties.length && moves.length < limit; j++) {
-    if (deadline !== undefined && (j & 15) === 0 && Date.now() > deadline) break;   /* s. getLegalMoves */
+    /* Sicherheitsbremse in der heißen Schleife, s. getLegalMoves */
+    if (hardDeadline !== undefined && (j & 15) === 15 && Date.now() > hardDeadline) break;
     const r = j + Math.floor(Math.random() * (empties.length - j));
     const t = empties[j]; empties[j] = empties[r]; empties[r] = t;
     const i = empties[j];
@@ -796,7 +1083,7 @@ function sampleLegalMoves(board, color, S, koPoint, deadline) {
     _legalScratch[i] = color;
     const {captured, undo} = removeDeadGroupsUndoable(_legalScratch, opp, i);
     let legal = true;
-    if (captured === 0 && floodFill(_legalScratch, i).liberties.length === 0) legal = false;
+    if (captured === 0 && countLiberties(_legalScratch, i, 1) === 0) legal = false;
     applyUndo(_legalScratch, undo);
     _legalScratch[i] = 0;
     if (legal) moves.push({x: xOf(i), y: yOf(i), idx: i});
@@ -904,35 +1191,32 @@ function mctsPUCT(board, aiColor, captures, rootScored, koPoint) {
   let root = null;
   if (PARAMS.mctsTreeReuse >= 1 && _mctsSavedRoot && _mctsSavedRoot.aiColor === aiColor) {
     root = _tryReuseSubtree(_mctsSavedRoot.board, aiColor, _mctsSavedRoot.node, board);
-  }
-  /* Fix: Der wiederverwendete Baum wurde im VORHERIGEN Zug gebaut — ohne
-     den aktuellen koPoint, den der menschliche Zug gerade erst gesetzt
-     haben kann. Ohne diesen Filter verschwendet MCTS die komplette
-     Suchzeit auf ein Kind, das inzwischen Ko-illegal ist; placeStone lehnt
-     es später ab, und findAnyLegalMove spielt einen quasi-zufälligen
-     Fallback-Zug (in einer echten Partie beobachtet: Q stürzte von 0.67
-     auf -1.00 ab genau diesem Punkt). root.N UND root.W müssen beide neu
-     summiert werden — root.N geht in den PUCT-Explorationsterm √N_parent
-     ein und würde sonst alle verbleibenden Kinder falsch gewichten. */
-  if (root && koPoint !== null && koPoint !== undefined && root.kids) {
-    const before = root.kids.length;
-    root.kids = root.kids.filter(k => k.idx !== koPoint);
-    if (root.kids.length < before) {
-      root.N = root.kids.reduce((s, k) => s + k.N, 0);
-      root.W = root.kids.reduce((s, k) => s + k.W, 0);
+    /* Wiederverwendete Wurzeln VALIDIEREN — zwei bewiesene Fallen aus der
+       347-Züge-Partie vom 16.7.:
+       1. Spielt der Mensch einen Zug, dessen Knoten nie expandiert wurde
+          (kids === null — bei wenigen Sims pro Zug häufig), crashte das
+          root.kids.length unten mit TypeError. Der Crash tötete erst den
+          Worker (workerError) und später denselben Code im Hauptthread-
+          Fallback — aiThinking blieb für immer true, die KI hing.
+       2. Die Kinder wiederverwendeter Wurzeln wurden im VORHERIGEN Zug
+          ohne den aktuellen Ko-/Superko-Kontext expandiert. rootScored
+          ist gefiltert, der Reuse-Baum nicht: Zug 270 verbrannte das
+          komplette Suchbudget auf den Ko-verbotenen Rückschlag G8 und
+          spielte dann einen Notzug (A19). Deshalb: Kinder gegen die
+          aktuelle legale Zugliste filtern, Besuche entfernter Kinder aus
+          root.N herausrechnen. */
+    if (root && (!root.kids || !root.kids.length)) root = null;
+    if (root) {
+      const legalSet = new Set(rootScored.map(s => s.m.idx));
+      const kept = root.kids.filter(k => legalSet.has(k.idx));
+      if (kept.length !== root.kids.length) {
+        for (const k of root.kids) if (!legalSet.has(k.idx)) root.N -= k.N;
+        root.kids = kept;
+        if (!kept.length) root = null;
+      }
     }
-    if (!root.kids.length) root = null;
   }
-  /* Fix: _tryReuseSubtree kann einen NOCH NICHT EXPANDIERTEN Knoten liefern
-     (kids === null, nicht []). Ein Knoten wird erst beim ZWEITEN Besuch
-     expandiert — nach unserem Zug haben die meisten gespeicherten Gegner-
-     Antworten also N<=1 und kids===null. Der Ko-Filter oben greift dann
-     nicht (root.kids ist falsy), root bleibt truthy und wurde folglich
-     nicht neu gebaut → root.kids.length warf einen TypeError.
-     Ein kinderloser Knoten trägt ohnehin keine nutzbare Statistik als
-     Wurzel, deshalb hier sauber frisch aufbauen. */
-  if (!root || !root.kids || !root.kids.length)
-    root = {N: 0, W: 0, kids: _mctsKids(rootScored, PARAMS.mctsRootChildren)};
+  if (!root) root = {N: 0, W: 0, kids: _mctsKids(rootScored, PARAMS.mctsRootChildren)};
   if (!root.kids.length) return null;
 
   let sims = 0;
@@ -946,16 +1230,11 @@ function mctsPUCT(board, aiColor, captures, rootScored, koPoint) {
       if (Date.now() > hardDeadline) break;   /* Sicherheitsbremse: teure Expansion abbrechen */
       if (node !== root && node.kids === null) {
         const legal = getLegalMoves(_mctsScratch, color, _emptyHashes, null, hardDeadline);
-        if (Date.now() > hardDeadline) {
-          /* Zeit ist WÄHREND der Kandidatenliste abgelaufen — legal ist
-             evtl. unvollständig oder leer. NICHT als node.kids cachen,
-             sonst würde dieser Knoten fälschlich dauerhaft als terminal
-             markiert (node.kids=[] bricht die nächste Prüfung sofort ab)
-             und via Tree-Reuse sogar in den nächsten Zug getragen.
-             node.kids bleibt null — ein späterer Aufruf mit frischem
-             Zeitbudget kann ihn dann korrekt expandieren. */
-          break;
-        }
+        /* Deadline währenddessen gerissen → Liste evtl. abgeschnitten.
+           NICHT cachen: kids=[] würde den Knoten dauerhaft als terminal
+           markieren (Tree-Reuse trägt ihn in den nächsten Zug!). kids
+           bleibt null, der Knoten wird beim nächsten Besuch neu expandiert. */
+        if (Date.now() > hardDeadline) break;
         const list = legal.map(m => ({m, score: quickEval(_mctsScratch, m.idx, color)}));
         list.sort((a,b) => b.score - a.score);
         node.kids = _mctsKids(list, PARAMS.mctsChildren);
@@ -1172,6 +1451,12 @@ const state = {
   consecutivePasses: 0, moveCount: 0, gameOver: false, log: [], lastMove: null,
   koPoint: null,                          // Fix 7: 1-Ply-Ko-Punkt (Index oder null)
   scoringMode: 'area',                    // 'area' (chinesisch) oder 'territory' (japanisch)
+  /* Bug-Report-Daten: Diagnose pro KI-Zug + exakter Zustand VOR dem letzten
+     KI-Zug. Motivation: der Hänger nach Zug 185 (Session 15.7.) war nicht
+     reproduzierbar, weil der Brettzustand fehlte — das Zugprotokoll allein
+     reicht nicht (Ko, Gefangene, Superko-Historie gehen verloren). */
+  aiDiag: [], lastAIRequest: null, aiReqT0: 0, aiReqBudget: 0,
+  workerDeadReason: null,
   aiEnabled: false, aiColor: 2, aiDifficulty: 'easy',
   aiThinking: false, aiRequestId: 0, aiWorker: null, aiWorkerCtx: null, deadStones: new Set(), undoStack: []
 };
@@ -1272,7 +1557,7 @@ function resetGame() {
   /* Worker-Pool beenden — neuer Worker beim nächsten Hard-Zug */
   cleanupWorker();
   state.workerDead = false;   /* Neues Spiel = neuer Versuch */
-  _lastMsPerSim = null;       /* Hauptthread-Kopie zurücksetzen — s. Sync-Fix */
+  state.workerDeadReason = null;
   if (globalThis.policyNet) { policyNet._trained=false; policyNet._gameBuffer=[]; }
   state.aiRequestId++;
   const eb = createBoard(), eh = computeZobrist(eb);
@@ -1281,7 +1566,8 @@ function resetGame() {
     boardHistory: new Set([eh]), currentHash: eh,
     consecutivePasses: 0, moveCount: 0, gameOver: false, lastMove: null,
     koPoint: null,                         // Fix 7
-    log: [], aiThinking: false, deadStones: new Set(), undoStack: []
+    log: [], aiThinking: false, deadStones: new Set(), undoStack: [],
+    aiDiag: [], lastAIRequest: null, aiReqT0: 0, aiReqBudget: 0
   });
   pendingTouch = null;
   document.getElementById('territory-panel').style.display = 'none';
@@ -1290,12 +1576,23 @@ function resetGame() {
 
 function resolveLifeAndDeath() {
   state.deadStones = new Set();
+  /* Benson zuerst: Bewiesenes wird exakt behandelt, NUR der unklare Rest
+     geht weiter durch die Freiheiten/Augen-Heuristik. Pass-alive-Ketten
+     können nie fälschlich entfernt werden, bewiesen tote Gegner in
+     pass-alive-Gebiet werden garantiert entfernt — die Heuristik kann
+     das Ergebnis nur noch für unklare Gruppen beeinflussen. */
+  const bEpoch = bensonClassify(state.board);
   const processed = new Uint8Array(BOARD_SIZE);
   for (let i = 0; i < BOARD_SIZE; i++) {
     const color = state.board[i];
     if (!color || processed[i]) continue;
     const {group, liberties} = floodFill(state.board, i);
     for (const g of group) processed[g] = 1;
+    if (_bnAlive[i] === bEpoch) continue;                                   /* bewiesen lebendig */
+    if (_bnDead[i] === bEpoch) {                                            /* bewiesen tot */
+      for (const g of group) state.deadStones.add(g);
+      continue;
+    }
     if (liberties.length >= 5) continue;
     const eyes = findEyes(state.board, group, color);
     if (eyes.length >= 2) continue;
@@ -1409,6 +1706,16 @@ function applyAIResult(result, reqId, netInp, netPriors, netHidden) {
       state.log.push(`   ↳ ${result.info}`);
     }
   } else pass();
+  /* Diagnose-Zeile für den Bug-Report: was hatte die KI vor, wie lange hat
+     sie wirklich gebraucht, mit welchem Budget? dauerMs >> budgetMs zeigt
+     einen Zug, bei dem die Sicherheitsbremsen greifen mussten. */
+  state.aiDiag.push({
+    zug: state.moveCount, typ: result.type, info: result.info || null,
+    dauerMs: state.aiReqT0 ? Date.now() - state.aiReqT0 : null,
+    budgetMs: state.aiReqT0 ? state.aiReqBudget : null,
+    msProSim: typeof _lastMsPerSim === 'number' ? Math.round(_lastMsPerSim * 100) / 100 : null
+  });
+  state.aiReqT0 = 0;
   state.aiThinking = false;
   render(); updateUI(); updateAIStatus(); updateUndoButton();
   if (!state.gameOver && state.aiEnabled && state.currentPlayer === state.aiColor) triggerAIMove();
@@ -1450,12 +1757,9 @@ function buildWorkerSource() {
           d.koPoint ?? null                      /* Fix 7: 8. Parameter */
         );
         if (globalThis.policyNet) globalThis.policyNet._netPriors = null;
-        /* Sync-Fix: Hauptthread und Worker sind GETRENNTE JS-Umgebungen mit
-           je eigener Kopie von _lastMsPerSim (worker-ai läuft in beiden,
-           aber ohne gemeinsamen Speicher). Ohne diesen Wert bliebe die
-           Hauptthread-Kopie für immer null — der Watchdog würde dann OHNE
-           die Rückkopplungs-Korrektur rechnen, während der Worker selbst
-           längst mit einem angepassten Budget arbeitet. */
+        /* lastMsPerSim mitschicken: der Hauptthread-Watchdog hat eine
+           EIGENE Kopie von _lastMsPerSim (getrennte JS-Umgebung) und
+           würde ohne diese Rückmeldung für immer mit null rechnen. */
         self.postMessage({...result, reqId: d.reqId, lastMsPerSim: _lastMsPerSim});
       } catch (err) {
         self.postMessage({
@@ -1482,10 +1786,22 @@ function cleanupWorker() {
 function fallbackToMainThread(reqId, netInp, netPriors, netHidden) {
   setTimeout(() => {
     if (reqId !== state.aiRequestId) return;
-    const r = getAIMove(state.board, state.aiColor,
-      Array.from(state.boardHistory), {...state.captures},
-      state.moveCount, 'hard', reqId,
-      state.koPoint);                        /* Fix 7 */
+    let r;
+    try {
+      r = getAIMove(state.board, state.aiColor,
+        Array.from(state.boardHistory), {...state.captures},
+        state.moveCount, 'hard', reqId,
+        state.koPoint);                      /* Fix 7 */
+    } catch (e) {
+      /* Letzte Verteidigungslinie: wirft getAIMove hier, gibt es keinen
+         Watchdog mehr, der uns rettet — ohne dieses catch blieb aiThinking
+         für immer true und die KI hing (so gesehen in der 347-Züge-Partie:
+         der Reuse-Crash tötete erst den Worker, dann denselben Code hier). */
+      console.error('[Fallback] getAIMove synchron gescheitert:', e);
+      state.log.push(`! KI-Fehler (synchron): ${(e && e.message) || e} → Notzug`);
+      const fb = findAnyLegalMove(state.aiColor);
+      r = fb ? {type:'stone', x:fb.x, y:fb.y, requestId:reqId} : {type:'pass', requestId:reqId};
+    }
     applyAIResult(r, reqId, netInp, netPriors, netHidden);
   }, 10);
 }
@@ -1493,19 +1809,22 @@ function fallbackToMainThread(reqId, netInp, netPriors, netHidden) {
 function attachWorkerHandlers() {
   state.aiWorker.onmessage = function(e) {
     const ctx = state.aiWorkerCtx;
-    /* Sync-Fix: Hauptthread-Kopie von _lastMsPerSim (worker-ai läuft auch
-       hier, aber isoliert vom Worker) aktuell halten — sonst rechnet der
-       Watchdog beim NÄCHSTEN Zug mit veralteten/fehlenden Daten. VOR der
-       workerError-Verzweigung, damit auch Fehlerantworten den zuletzt
-       gemessenen Wert noch mitliefern (der Worker hatte ihn ja schon vor
-       dem Absturz gemessen — sonst geht dieser Datenpunkt verloren). */
-    if (typeof e.data.lastMsPerSim === 'number') _lastMsPerSim = e.data.lastMsPerSim;
+    /* Messwert des Workers in die Hauptthread-Kopie übernehmen — der
+       Watchdog in triggerAIMove nutzt getAdaptiveTimeBudget und rechnete
+       sonst für immer mit _lastMsPerSim === null (worker-ai läuft in
+       beiden Umgebungen, aber die Variablen sind getrennte Kopien). */
+    if (e.data && typeof e.data.lastMsPerSim === 'number')
+      _lastMsPerSim = e.data.lastMsPerSim;
     /* Selbst abgefangener Fehler aus dem Worker (siehe buildWorkerSource):
        genauso behandeln wie ein echtes onerror-Event, da manche mobilen
        WebViews onerror bei geworfenen Exceptions nicht zuverlässig feuern. */
     if (e.data && e.data.type === 'workerError') {
       console.error('[Worker] Interner Fehler:', e.data.message, e.data.stack || '');
-      state.log.push(`! Worker-Fehler: ${e.data.message || 'unbekannt'}`);
+      /* Grund festhalten und ins Protokoll — der Worker-Tod in der
+         347-Züge-Partie war unsichtbar, weil er nur in der Konsole stand.
+         So landet er im Zugprotokoll UND im 🐞-Bug-Report. */
+      state.workerDeadReason = `workerError: ${e.data.message || 'unbekannt'}`;
+      state.log.push(`! Worker-Fehler: ${e.data.message || 'unbekannt'} → synchroner Modus`);
       state.workerDead = true;
       cleanupWorker();
       fallbackToMainThread(e.data.reqId,
@@ -1517,8 +1836,9 @@ function attachWorkerHandlers() {
   };
   state.aiWorker.onerror = function(err) {
     console.error('[Worker] Fehler:', err.message || err);
-    state.log.push(`! Worker-Crash: ${err.message || 'unbekannt'}`);
     const ctx = state.aiWorkerCtx;
+    state.workerDeadReason = `onerror: ${err.message || 'unbekannt'}`;
+    state.log.push(`! Worker-Crash: ${err.message || 'unbekannt'} → synchroner Modus`);
     state.workerDead = true;   /* nicht bei jedem Zug erneut versuchen */
     cleanupWorker();
     fallbackToMainThread(state.aiRequestId,
@@ -1549,6 +1869,24 @@ function triggerAIMove() {
   }
 
   if (state.aiDifficulty === 'hard') {
+    /* Bug-Report-Snapshot: exakter Zustand VOR diesem KI-Zug, in derselben
+       Form wie das Worker-postMessage — damit ein Hänger später außerhalb
+       des Spiels 1:1 nachgestellt werden kann (getAIMove mit genau diesen
+       Daten füttern). Wird von buildBugReport() exportiert. */
+    const _adaptiveBudget = getAdaptiveTimeBudget(_emptyCount);
+    state.aiReqT0 = Date.now();
+    state.aiReqBudget = _adaptiveBudget;
+    state.lastAIRequest = {
+      board:      Array.from(state.board),
+      aiColor:    state.aiColor,
+      histHashes: Array.from(state.boardHistory),
+      captures:   {...state.captures},
+      mc:         state.moveCount,
+      koPoint:    state.koPoint,
+      params:     JSON.parse(JSON.stringify(PARAMS)),
+      netBlend:   _netPriors ? policyNet.blendWeight : 0,
+      lastMsPerSim: _lastMsPerSim
+    };
     if (state.workerDead) { fallbackToMainThread(reqId, _netInp, _netPriors, _netHidden); return; }
     try {
       if (!state.aiWorker) {
@@ -1592,17 +1930,27 @@ function triggerAIMove() {
          (kein try/catch der Welt hilft dagegen), erzwinge nach großzügiger
          Zeit den Fallback. aiTimeBudget ist die geplante Denkzeit — das
          Dreifache plus Puffer lässt genug Luft für langsame Geräte, ohne
-         bei einem echten Hänger ewig zu warten. */
-      const _adaptiveBudget = getAdaptiveTimeBudget(_emptyCount);
+         bei einem echten Hänger ewig zu warten. (_adaptiveBudget wird oben
+         beim Bug-Report-Snapshot berechnet — dieselbe Zahl für beide.) */
       const watchdogMs = _adaptiveBudget * 3 + 3000;
-      setTimeout(() => {
+      const _watchdog = () => {
         if (reqId !== state.aiRequestId) return;   /* längst erledigt/abgebrochen */
         if (!state.aiThinking) return;             /* Antwort kam bereits an */
+        /* Hintergrund-Tab: Android pausiert Worker UND Timer — ein
+           suspendierter Worker ist nicht tot. Nicht töten, weiter warten;
+           erst ein Timeout bei SICHTBARER Seite zählt als echter Hänger. */
+        if (typeof document !== 'undefined' && document.hidden) {
+          setTimeout(_watchdog, watchdogMs);
+          return;
+        }
         console.warn('[Worker] Watchdog: keine Antwort nach', watchdogMs, 'ms — erzwinge Fallback');
+        state.workerDeadReason = `Watchdog: keine Antwort nach ${watchdogMs} ms`;
+        state.log.push(`! Worker-Watchdog (${watchdogMs} ms) → synchroner Modus`);
         state.workerDead = true;
         cleanupWorker();
         fallbackToMainThread(reqId, _netInp, _netPriors, _netHidden);
-      }, watchdogMs);
+      };
+      setTimeout(_watchdog, watchdogMs);
     } catch(e) {
       /* Versuch 3: Hauptthread */
       console.warn('[triggerAIMove] Worker nicht verfügbar, synchron:', e);
@@ -1881,19 +2229,68 @@ document.getElementById('btn-reset').addEventListener('click',()=>{
   if(state.aiEnabled&&!humanTurn())triggerAIMove();
 });
 
-document.getElementById('btn-copy-log').addEventListener('click', () => {
-  const text = state.log.join('\n');
-  navigator.clipboard.writeText(text).then(() => {
-    const btn = document.getElementById('btn-copy-log');
+function copyWithFeedback(text, btnId, idleLabel) {
+  const done = () => {
+    const btn = document.getElementById(btnId);
     btn.textContent = '✓'; btn.style.color = 'var(--green)';
-    setTimeout(() => { btn.textContent = '📋'; btn.style.color = ''; }, 1500);
-  }).catch(() => {
+    setTimeout(() => { btn.textContent = idleLabel; btn.style.color = ''; }, 1500);
+  };
+  navigator.clipboard.writeText(text).then(done).catch(() => {
     const ta = document.createElement('textarea');
     ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
     document.body.appendChild(ta); ta.select();
     document.execCommand('copy');
     document.body.removeChild(ta);
+    done();
   });
+}
+
+document.getElementById('btn-copy-log').addEventListener('click', () => {
+  copyWithFeedback(state.log.join('\n'), 'btn-copy-log', '📋');
+});
+
+/* ═══ Bug-Report: Zugprotokoll + exakter Reproduktions-Zustand ═══
+   Kombiniert alles, was zum Nachstellen eines KI-Problems nötig ist:
+   - zugprotokoll: die menschenlesbare Zugliste (wie 📋)
+   - kiDiagnose:   pro KI-Zug Sims/Q aus info, echte Dauer vs. Budget, ms/Sim
+   - brett:        ASCII-Brett des AKTUELLEN Zustands (X=Schwarz, O=Weiß)
+   - reproduktion: der letzte Worker-Request 1:1 (Brett, Historie-Hashes,
+     Gefangene, Ko-Punkt, PARAMS) — getAIMove damit füttern reproduziert
+     exakt den Zug, bei dem es geklemmt hat. Genau das fehlte beim nicht
+     reproduzierbaren Hänger nach Zug 185. */
+function buildBugReport() {
+  const rows = [];
+  for (let y = 0; y < SIZE; y++) {
+    let r = '';
+    for (let x = 0; x < SIZE; x++) r += '.XO'[state.board[idx(x, y)]] + ' ';
+    rows.push(String(SIZE - y).padStart(2) + ' ' + r.trimEnd());
+  }
+  rows.push('   ' + COL_LETTERS.split('').join(' '));
+  return JSON.stringify({
+    meta: {
+      erstellt:   new Date().toISOString(),
+      userAgent:  navigator.userAgent,
+      zug:        state.moveCount,
+      amZug:      state.currentPlayer === 1 ? 'Schwarz' : 'Weiß',
+      kiFarbe:    state.aiColor === 1 ? 'Schwarz' : 'Weiß',
+      kiStufe:    state.aiDifficulty,
+      kiDenkt:    state.aiThinking,
+      workerDead: state.workerDead,
+      workerDeadReason: state.workerDeadReason || null,
+      spielVorbei: state.gameOver,
+      koPoint:    state.koPoint,
+      gefangene:  {...state.captures},
+      msProSim:   typeof _lastMsPerSim === 'number' ? Math.round(_lastMsPerSim * 100) / 100 : null
+    },
+    brett: rows,
+    zugprotokoll: state.log,
+    kiDiagnose: state.aiDiag,
+    reproduktion: state.lastAIRequest
+  }, null, 1);
+}
+
+document.getElementById('btn-bug-report').addEventListener('click', () => {
+  copyWithFeedback(buildBugReport(), 'btn-bug-report', '🐞');
 });
 render();updateUI();updateAIStatus();updateUndoButton();
 </script>
