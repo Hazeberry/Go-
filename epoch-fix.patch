@@ -1,0 +1,86 @@
+--- a/index.html
++++ b/index.html
+@@ -164,10 +164,37 @@
+ const _ffVisited = new Int32Array(BOARD_SIZE);
+ let   _ffEpoch   = 0;
+ 
++/* 32-Bit-Überlauf-Wache für das Epochen-Marking (Fund durch den
++   A/B-Harness: Partie 3 crashte mit "NEIGHBORS[g] is not iterable").
++   _ffEpoch wird pro countLiberties-/floodFill-/removeDeadGroups-/
++   evaluateBoard-Aufruf erhöht — auf Schwer sind das gemessen
++   ~6 Mio. pro Zug. Die Marker-Arrays (_ffVisited, _rdgChecked,
++   _evalBoardSeen) sind Int32Array: Überschreitet der Zähler 2^31,
++   kippt der gespeicherte Wert negativ, der Vergleich mit der echten
++   Epoche schlägt ab dann IMMER fehl — die Besucht-Markierung ist
++   lautlos tot. Folge: Gruppen-Queues laufen über → Crash in
++   evaluateBoard/countLiberties bzw. Endlosschleife mit OOM in
++   floodFill (im Browser: Worker-Hänger → Watchdog). Der Zähler
++   kumuliert über Partien in derselben JS-Umgebung (Worker lebt
++   zwischen Zügen, Hauptthread zwischen Spielen — resetGame setzt
++   ihn nicht zurück); der Überlauf tritt nach grob 300–350
++   Schwer-Zügen Summe auf. Fix: kurz vor 2^31 alle Marker nullen
++   und bei 1 neu starten — Markierungen gelten ohnehin nur
++   innerhalb eines Aufrufs, nichts geht verloren. */
++function _nextFfEpoch() {
++  if (++_ffEpoch >= 0x7fffffff) {
++    _ffEpoch = 1;
++    _ffVisited.fill(0);
++    _rdgChecked.fill(0);
++    _evalBoardSeen.fill(0);
++  }
++  return _ffEpoch;
++}
++
+ function floodFill(board, startIdx) {
+   const color = board[startIdx];
+   const group = [], liberties = [];
+-  const epoch = ++_ffEpoch;
++  const epoch = _nextFfEpoch();
+   const queue = [startIdx];
+   let head = 0;
+   _ffVisited[startIdx] = epoch;
+@@ -203,7 +230,7 @@
+ function countLiberties(board, startIdx, cap) {
+   const color = board[startIdx];
+   const limit = cap === undefined ? 0x7fffffff : cap;
+-  const epoch = ++_ffEpoch;
++  const epoch = _nextFfEpoch();
+   let head = 0, tail = 0, libs = 0;
+   _groupQueue[tail++] = startIdx;
+   _ffVisited[startIdx] = epoch;
+@@ -237,7 +264,7 @@
+ const _rdgChecked = new Int32Array(BOARD_SIZE);
+ 
+ function removeDeadGroups(board, color, nearIdx) {
+-  const epoch = ++_ffEpoch;
++  const epoch = _nextFfEpoch();
+   let captured = 0;
+   if (nearIdx !== undefined) {
+     /* Heißer Pfad (pro Kandidat/Rollout-Ply): lebende Nachbargruppen kosten
+@@ -665,7 +692,7 @@
+ const _tsumegoScratch = new Uint8Array(BOARD_SIZE);
+ 
+ function removeDeadGroupsUndoable(board, color, nearIdx) {
+-  const epoch = ++_ffEpoch;
++  const epoch = _nextFfEpoch();
+   let captured = 0;
+   const undo = [];
+   if (nearIdx !== undefined) {
+@@ -1075,7 +1102,7 @@
+     for (let i = 0; i < BOARD_SIZE; i++) if (!board[i]) empt++;
+     if (empt <= PARAMS.bensonEvalMaxEmpty) bEpoch = bensonClassify(board);
+   }
+-  const seenEpoch = ++_ffEpoch;
++  const seenEpoch = _nextFfEpoch();
+   for (let i = 0; i < BOARD_SIZE; i++) {
+     const c = board[i]; if (!c || _evalBoardSeen[i] === seenEpoch) continue;
+     if (bEpoch >= 0 && _bnDead[i] === bEpoch) {
+@@ -1089,7 +1116,7 @@
+       }
+       continue;
+     }
+-    const libEpoch = ++_ffEpoch;
++    const libEpoch = _nextFfEpoch();
+     let head = 0, tail = 0, size = 0, libs = 0;
+     _groupQueue[tail++] = i; _evalBoardSeen[i] = seenEpoch;
+     while (head < tail) {
