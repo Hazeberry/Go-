@@ -3151,7 +3151,22 @@ globalThis.policyNet = new PolicyNet();
     },
   ];
 
+  /* ═══ Konfiguration dauerhaft sichern ═══
+     Bisher waren alle Regler nach jedem Neuladen wieder auf Standard —
+     mühsam eingestellte Werte (z.B. Aufgabe-Q 0.89, Zeit-Budget 5000)
+     waren jedes Mal weg. Speichern legt PARAMS in localStorage ab, beim
+     Seitenaufbau wird das automatisch wieder eingespielt. Reset löscht
+     den Eintrag mit, sonst wäre der nächste Seitenaufbau wieder alt.
+     ACHTUNG: Diese Konstante muss VOR dashLoadSaved() stehen — als const
+     liegt sie bis zu ihrer Auswertung in der temporalen Todeszone, und
+     der Zugriff aus der (hochgezogenen) Funktion wirft dann still. */
+  const PD_STORE = 'go_params';
+
   const sidebar = document.querySelector('.sidebar');
+  /* Gespeicherte Konfiguration einspielen, BEVOR die Regler gebaut werden —
+     sonst zeigten die Felder Standardwerte, während die Engine bereits mit
+     den geladenen rechnet. */
+  dashLoadSaved();
   const panel = document.createElement('div');
   panel.className = 'panel'; panel.id = 'pdash';
 
@@ -3266,6 +3281,7 @@ globalThis.policyNet = new PolicyNet();
   html += `
       <div class="pd-reset-row">
         <button class="pd-reset-btn" onclick="dashReset()">↺ Reset</button>
+        <button class="pd-export-btn" onclick="dashSave()">💾 Speichern</button>
         <button class="pd-export-btn" onclick="dashExport()">⬇ Export</button>
       </div>
     </div>`;
@@ -3430,7 +3446,38 @@ globalThis.policyNet = new PolicyNet();
     if (window.policyNet) policyNet.dashUpdate();
   };
 
+  window.dashSave = function() {
+    let ok = true;
+    try { localStorage.setItem(PD_STORE, JSON.stringify(PARAMS)); }
+    catch (e) { console.warn('[Dashboard] Speichern fehlgeschlagen:', e); ok = false; }
+    const btn = document.querySelectorAll('.pd-export-btn')[0];
+    const orig = btn.textContent;
+    btn.textContent = ok ? '✓ Gespeichert' : '✗ Fehler';
+    btn.style.color = ok ? 'var(--green)' : 'var(--red)';
+    setTimeout(() => { btn.textContent = orig; btn.style.color = ''; }, 1500);
+  };
+
+  /* Beim Seitenaufbau einspielen. Nur Schlüssel, die es wirklich gibt, und
+     nur endliche Zahlen — ein alter oder manipulierter Eintrag darf die
+     Engine nicht mit NaN oder Fremdfeldern vergiften. */
+  function dashLoadSaved() {
+    let raw;
+    try { raw = localStorage.getItem(PD_STORE); }
+    catch (e) { console.warn('[Dashboard] localStorage nicht lesbar:', e); return 0; }
+    if (!raw) return 0;
+    let obj;
+    try { obj = JSON.parse(raw); } catch (e) { console.warn('[Dashboard] Gespeicherte Konfig unlesbar, ignoriert'); return 0; }
+    let n = 0;
+    for (const k of Object.keys(PARAMS_DEFAULT)) {
+      const v = obj[k];
+      if (typeof v === 'number' && Number.isFinite(v)) { PARAMS[k] = v; n++; }
+    }
+    if (n) console.log(`[Dashboard] ${n} gespeicherte Parameter geladen`);
+    return n;
+  }
+
   window.dashReset = function() {
+    try { localStorage.removeItem(PD_STORE); } catch (e) {}
     Object.assign(PARAMS, PARAMS_DEFAULT);
     for (const key of Object.keys(PARAMS_DEFAULT)) {
       const inp = document.getElementById('pd-' + key);
