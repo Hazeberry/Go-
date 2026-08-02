@@ -657,6 +657,10 @@ globalThis.PARAMS = {
   resignQ:        0.95,
   resignStreak:   5,
   resignMinMoves: 60,
+  /* Strukturelle Aufgabe: so viele Züge in Folge, in denen JEDER legale Zug
+     todgeboren wäre. Anders als resignQ ist das bewiesen, nicht geschätzt —
+     daher genügt eine kürzere Serie, und es wirkt auf allen Stufen. */
+  resignAllDeadStreak: 3,
 };
 globalThis.PARAMS_DEFAULT = Object.freeze({...PARAMS});
 
@@ -672,6 +676,7 @@ globalThis.PARAMS_DEFAULT = Object.freeze({...PARAMS});
 let _lastMsPerSim = null;
 let _lastMoveIdx  = -1;   /* letzter gegnerischer Zug, für Lokalitätsterm */
 let _hopelessStreak = 0;  /* aufeinanderfolgende KI-Züge mit Q ≤ -resignQ (für Aufgabe) */
+let _allDeadStreak  = 0;  /* aufeinanderfolgende Züge, in denen JEDER legale Zug todgeboren wäre */
 
 /* Stufenlose Zeitbudget-Skalierung nach freien Feldern ALS BASIS, plus
    Feedback-Korrektur aus der tatsächlich gemessenen letzten Simulation.
@@ -1462,8 +1467,26 @@ function getAIMove(board, aiColor, histHashes, captures, mc, diff, reqId, koPoin
     const e = bensonClassify(board);
     const born = _bnBornDead[aiColor];
     const kept = legal.filter(m => born[m.idx] !== e);
-    if (!kept.length) return {type:'pass', requestId:reqId,
-      info:`Pass — alle ${legal.length} legalen Züge wären todgeboren (Benson)`};
+    if (!kept.length) {
+      /* Kein einziger Zug, der nicht sofort verschenkt wäre — der Gegner
+         besitzt beweisbar jede leere Region. Passen ist korrekt, aber wenn
+         das anhält UND wir zurückliegen, ist Aufgeben ehrlicher, als den
+         Menschen weiterspielen zu lassen. Beobachtet: eine Easy-Partie lief
+         so bis Zug 539, weil die Q-basierte Aufgabe nur im MCTS-Zweig sitzt
+         und Easy/Mittel den nie erreichen. Dieses Kriterium ist bewiesen
+         statt geschätzt und gilt daher für ALLE Stufen. */
+      _allDeadStreak++;
+      const opp = aiColor === 1 ? 2 : 1;
+      const zurueck = estimateArea(board, aiColor) + (captures[aiColor] || 0)
+                    < estimateArea(board, opp)     + (captures[opp]     || 0);
+      if (PARAMS.resignEnabled >= 1 && mc >= PARAMS.resignMinMoves &&
+          zurueck && _allDeadStreak >= PARAMS.resignAllDeadStreak)
+        return {type:'resign', requestId:reqId,
+          info:`alle Züge todgeboren, ${_allDeadStreak}× in Folge, Rückstand`};
+      return {type:'pass', requestId:reqId,
+        info:`Pass — alle ${legal.length} legalen Züge wären todgeboren (Benson)`};
+    }
+    _allDeadStreak = 0;
     legal = kept;
   }
   const empty = legal.length;
@@ -1739,8 +1762,9 @@ function resetGame() {
     log: [], aiThinking: false, deadStones: new Set(), undoStack: [],
     aiDiag: [], lastAIRequest: null, aiReqT0: 0, aiReqBudget: 0
   });
-  _hopelessStreak = 0;   /* Hauptthread-Kopie der Aufgabe-Serie zurücksetzen
-                            (die Worker-Kopie stirbt mit cleanupWorker oben) */
+  _hopelessStreak = 0;   /* Hauptthread-Kopien der Aufgabe-Serien zurücksetzen
+                            (die Worker-Kopien sterben mit cleanupWorker oben) */
+  _allDeadStreak  = 0;
   pendingTouch = null;
   document.getElementById('territory-panel').style.display = 'none';
   drawStateToCache(); updateUndoButton();
@@ -2161,6 +2185,25 @@ function triggerAIMove() {
       if (state.gameOver || state.currentPlayer !== state.aiColor) {
         state.aiThinking = false; updateAIStatus(); return;
       }
+      /* Diagnose auch auf Leicht/Mittel: bisher hingen Zeitmessung und
+         Reproduktions-Snapshot am Hard-Zweig, dadurch waren in Bug-Reports
+         aus diesen Stufen ALLE Felder null (dauerMs, msProSim, reproduktion)
+         — genau dann also unbrauchbar, wenn man sie braucht. */
+      state.aiReqT0 = Date.now();
+      state.aiReqBudget = 0;              /* diese Stufen haben kein Zeitbudget */
+      state.lastAIRequest = {
+        board:      Array.from(state.board),
+        aiColor:    state.aiColor,
+        histHashes: Array.from(state.boardHistory),
+        captures:   {...state.captures},
+        mc:         state.moveCount,
+        koPoint:    state.koPoint,
+        lastMove:   state.lastMove,
+        difficulty: state.aiDifficulty,
+        params:     JSON.parse(JSON.stringify(PARAMS)),
+        netBlend:   0,
+        lastMsPerSim: _lastMsPerSim
+      };
       const r = getAIMove(state.board, state.aiColor,
         Array.from(state.boardHistory), {...state.captures},
         state.moveCount, state.aiDifficulty, reqId,
