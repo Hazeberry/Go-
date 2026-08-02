@@ -333,6 +333,13 @@ const _bnRegionId  = new Int32Array(BOARD_SIZE);
 const _bnChainMark = new Int32Array(BOARD_SIZE);
 const _bnAlive     = new Int32Array(BOARD_SIZE);
 const _bnDead      = new Int32Array(BOARD_SIZE);
+/* Todgeboren-Stempel für LEERE Punkte, indiziert nach der Farbe des
+   hypothetischen Steins: _bnBornDead[c][i] === Epoche → ein Stein der
+   Farbe c auf Punkt i wäre beweisbar tot (Punkt liegt in einer kleinen
+   Region, die nur an gegnerische pass-alive-Ketten grenzt — dort kann
+   nie ein Auge entstehen, und schlagen kann der Zug auch nichts, weil
+   pass-alive-Ketten immer ≥2 Freiheiten haben). */
+const _bnBornDead  = [null, new Int32Array(BOARD_SIZE), new Int32Array(BOARD_SIZE)];
 const _bnAdjTmp    = [0, 0, 0, 0];
 let _bnEpoch = 0;
 
@@ -436,9 +443,12 @@ function _bensonForColor(board, color, epoch) {
   for (let i = 0; i < BOARD_SIZE; i++) {
     if (board[i] === color) {
       if (chainAlive[_bnChainId[i]]) _bnAlive[i] = epoch;
-    } else if (board[i] === opp) {
+    } else {
       const r = _bnRegionId[i];
-      if (regionAlive[r] && regionSmall[r] && borderChains[r].length) _bnDead[i] = epoch;
+      if (regionAlive[r] && regionSmall[r] && borderChains[r].length) {
+        if (board[i] === opp) _bnDead[i] = epoch;
+        else _bnBornDead[opp][i] = epoch;   /* leerer Punkt: opp-Stein hier wäre todgeboren */
+      }
     }
   }
 }
@@ -589,6 +599,18 @@ globalThis.PARAMS = {
      früh gibt es keine pass-alive-Ketten, da wäre sie reiner Overhead. */
   bensonEval: 1,
   bensonEvalMaxEmpty: 160,
+  /* Benson-Zugfilter: todgeborene Züge (Stein wäre beweisbar tot) fliegen
+     aus der Kandidatenliste; bleibt nichts übrig → passen. Beendet das
+     endlose Steine-Füttern in gegnerisches pass-alive-Gebiet (beobachtet:
+     Partie mit 326 gefütterten Gefangenen). Beweisbasiert, kein Raten. */
+  bensonMoveFilter: 1,
+  /* Aufgabe: meldet die MCTS über mehrere KI-Züge hintereinander Q unter
+     -resignQ, ist die Stellung entschieden — aufgeben statt Material
+     spenden. minMoves verhindert Frühaufgabe auf verrauschtem Q. */
+  resignEnabled:  1,
+  resignQ:        0.95,
+  resignStreak:   5,
+  resignMinMoves: 60,
 };
 globalThis.PARAMS_DEFAULT = Object.freeze({...PARAMS});
 
@@ -603,6 +625,7 @@ globalThis.PARAMS_DEFAULT = Object.freeze({...PARAMS});
    Hauptthread-Kopie — beide Seiten rechnen mit denselben Daten. */
 let _lastMsPerSim = null;
 let _lastMoveIdx  = -1;   /* letzter gegnerischer Zug, für Lokalitätsterm */
+let _hopelessStreak = 0;  /* aufeinanderfolgende KI-Züge mit Q ≤ -resignQ (für Aufgabe) */
 
 /* Stufenlose Zeitbudget-Skalierung nach freien Feldern ALS BASIS, plus
    Feedback-Korrektur aus der tatsächlich gemessenen letzten Simulation.
@@ -1364,8 +1387,22 @@ function mctsPUCT(board, aiColor, captures, rootScored, koPoint) {
 function getAIMove(board, aiColor, histHashes, captures, mc, diff, reqId, koPoint, lastMove) {
   _lastMoveIdx = (lastMove === undefined || lastMove === null) ? -1 : lastMove;
   const hs = new Set(histHashes);
-  const legal = getLegalMoves(board, aiColor, hs, koPoint);
+  let legal = getLegalMoves(board, aiColor, hs, koPoint);
   if (!legal.length) return {type:'pass', requestId:reqId};
+  /* Benson-Zugfilter: Züge, deren Stein beweisbar tot geboren würde,
+     kommen gar nicht erst in die Kandidatenliste. Schlagen können solche
+     Züge nie (pass-alive-Randketten haben immer ≥2 Freiheiten), helfen
+     können sie nie (in der Region entsteht nie ein Auge) — sie verschenken
+     nur einen Stein. Bleibt kein Zug übrig, ist Passen der einzige
+     nicht-verschenkende Zug. */
+  if (PARAMS.bensonMoveFilter >= 1) {
+    const e = bensonClassify(board);
+    const born = _bnBornDead[aiColor];
+    const kept = legal.filter(m => born[m.idx] !== e);
+    if (!kept.length) return {type:'pass', requestId:reqId,
+      info:`Pass — alle ${legal.length} legalen Züge wären todgeboren (Benson)`};
+    legal = kept;
+  }
   const empty = legal.length;
   buildCrisisMap(board, aiColor);
   primeAreaCache(board, aiColor);
@@ -1438,8 +1475,21 @@ function getAIMove(board, aiColor, histHashes, captures, mc, diff, reqId, koPoin
     /* ── Schwer: MCTS-PUCT (neu) oder Kandidaten+Rollouts (alt, useMCTS=0) ── */
     if (PARAMS.useMCTS >= 1) {
       const r = mctsPUCT(board, aiColor, captures, scored, koPoint);
-      if (r) return {type:'stone', x:r.m.x, y:r.m.y, requestId:reqId,
-        info:`MCTS ${r.sims}${r.sims < 50 ? ' ⚠' : ''} Sims · ${r.share}% ${coordToLabel(r.m.x,r.m.y)} · Q ${r.q.toFixed(2)}`};
+      if (r) {
+        /* Aufgabe-Prüfung: Q ist aus KI-Sicht — anhaltend ≤ -resignQ heißt,
+           selbst die beste gefundene Fortsetzung verliert praktisch sicher.
+           Die Serie lebt im Worker zwischen Zügen (wie _lastMsPerSim). */
+        if (PARAMS.resignEnabled >= 1 && mc >= PARAMS.resignMinMoves && r.q <= -PARAMS.resignQ) {
+          _hopelessStreak++;
+          if (_hopelessStreak >= PARAMS.resignStreak)
+            return {type:'resign', requestId:reqId,
+              info:`Q ${r.q.toFixed(2)} über ${_hopelessStreak} Züge in Folge`};
+        } else {
+          _hopelessStreak = 0;
+        }
+        return {type:'stone', x:r.m.x, y:r.m.y, requestId:reqId,
+          info:`MCTS ${r.sims}${r.sims < 50 ? ' ⚠' : ''} Sims · ${r.share}% ${coordToLabel(r.m.x,r.m.y)} · Q ${r.q.toFixed(2)}`};
+      }
       return {type:'pass', requestId:reqId};
     }
     let CAND, R, D;
@@ -1499,6 +1549,7 @@ const state = {
   consecutivePasses: 0, moveCount: 0, gameOver: false, log: [], lastMove: null,
   koPoint: null,                          // Fix 7: 1-Ply-Ko-Punkt (Index oder null)
   sgfMoves: [],                           // Zugfolge für SGF-Export
+  resignedBy: null,                       // Farbe, die aufgegeben hat (für Anzeige + SGF RE[+R])
   scoringMode: 'area',                    // 'area' (chinesisch) oder 'territory' (japanisch)
   /* Bug-Report-Daten: Diagnose pro KI-Zug + exakter Zustand VOR dem letzten
      KI-Zug. Motivation: der Hänger nach Zug 185 (Session 15.7.) war nicht
@@ -1620,9 +1671,12 @@ function resetGame() {
     consecutivePasses: 0, moveCount: 0, gameOver: false, lastMove: null,
     koPoint: null,                         // Fix 7
     sgfMoves: [],
+    resignedBy: null,
     log: [], aiThinking: false, deadStones: new Set(), undoStack: [],
     aiDiag: [], lastAIRequest: null, aiReqT0: 0, aiReqBudget: 0
   });
+  _hopelessStreak = 0;   /* Hauptthread-Kopie der Aufgabe-Serie zurücksetzen
+                            (die Worker-Kopie stirbt mit cleanupWorker oben) */
   pendingTouch = null;
   document.getElementById('territory-panel').style.display = 'none';
   drawStateToCache(); updateUndoButton();
@@ -1759,7 +1813,20 @@ function applyAIResult(result, reqId, netInp, netPriors, netHidden) {
     } else if (result.info) {
       state.log.push(`   ↳ ${result.info}`);
     }
-  } else pass();
+  } else if (result.type === 'resign') {
+    state.gameOver = true;
+    state.resignedBy = state.aiColor;
+    const kiName = state.aiColor === 1 ? '● Schwarz' : '○ Weiß';
+    state.log.push(`— ${kiName} (KI) gibt auf —`);
+    if (result.info) state.log.push(`   ↳ ${result.info}`);
+    document.getElementById('final-label').textContent = 'Aufgabe';
+    document.getElementById('final-score').textContent =
+      state.aiColor === 1 ? 'Weiß gewinnt' : 'Schwarz gewinnt';
+    document.getElementById('territory-panel').style.display = 'flex';
+  } else {
+    pass();
+    if (result.info) state.log.push(`   ↳ ${result.info}`);
+  }
   /* Diagnose-Zeile für den Bug-Report: was hatte die KI vor, wie lange hat
      sie wirklich gebraucht, mit welchem Budget? dauerMs >> budgetMs zeigt
      einen Zug, bei dem die Sicherheitsbremsen greifen mussten. */
@@ -2053,7 +2120,9 @@ function buildSGF() {
   let head = `(;GM[1]FF[4]CA[UTF-8]AP[Go-Dashboard]SZ[${SIZE}]KM[${KOMI}]RU[${rules}]`
            + `PB[${esc(pb)}]PW[${esc(pw)}]DT[${dt}]`;
 
-  if (state.gameOver) {
+  if (state.resignedBy) {
+    head += `RE[${state.resignedBy === 1 ? 'W' : 'B'}+R]`;   /* Gegner der aufgebenden Farbe gewinnt */
+  } else if (state.gameOver) {
     let sb, sw;
     if (state.scoringMode === 'territory') { const t = finalTerritoryScore(); sb = t[1]; sw = t[2] + KOMI; }
     else { const a = finalAreaScore(); sb = a[1]; sw = a[2] + KOMI; }
@@ -2908,6 +2977,12 @@ globalThis.policyNet = new PolicyNet();
          tip:'⭐ EXPERIMENTELL. Bonus für Züge nahe dem letzten Gegnerzug. Gemessen: bis 200 wirkungslos, ab 400 nur noch reaktiv. Default 0 = aus. Braucht A/B-Test.'},
         {key:'localityRadius', label:'Lokal-Radius', step:1, min:1, max:9,
          tip:'Chebyshev-Radius um den letzten Gegnerzug, linear abfallend'},
+        {key:'bensonMoveFilter', label:'Benson-Filter', step:1, min:0, max:1,
+         tip:'1 = todgeborene Züge (beweisbar toter Stein) fliegen aus der Kandidatenliste; nur Pass bleibt, wenn nichts übrig ist'},
+        {key:'resignQ', label:'Aufgabe-Q', step:0.01, min:0.5, max:1, float:true,
+         tip:'Q-Schwelle (aus KI-Sicht negativ) für die Aufgabe-Serie'},
+        {key:'resignStreak', label:'Aufgabe-Serie', step:1, min:2, max:20,
+         tip:'So viele KI-Züge in Folge mit Q ≤ -Schwelle → KI gibt auf. resignEnabled=0 in PARAMS schaltet ab.'},
         {key:'adaptiveBudgetTargetMinSims', label:'Ziel-Min-Sims', step:10, min:20, max:300, main:true,
          tip:'⭐ HAUPTHEBEL. Direkte Messkorrektur — wenn letzter Zug weniger Sims schaffte, wird automatisch mehr Zeit gegeben, unabhängig von der Ursache (Randkampf, große Gruppen etc.)'},
         {key:'rolloutSample',     label:'Rollout-Sample',   step:8,   min:0,   max:200,
