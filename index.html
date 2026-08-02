@@ -113,7 +113,10 @@
 const SIZE = 19;
 const BOARD_SIZE = SIZE * SIZE;
 const COL_LETTERS = 'ABCDEFGHJKLMNOPQRST';
-const HOSHI_XY = [[3,3],[9,3],[15,3],[3,9],[9,9],[3,15],[9,15],[15,15]];
+/* Alle NEUN Sternpunkte. [15,9] (= Q10) fehlte — dadurch war der rechte
+   mittlere Punkt auf dem Brett unsichtbar UND bekam in evalOpening nie den
+   openHoshiBonus, den seine drei Spiegelpunkte D10/K10/Q4 bekamen. */
+const HOSHI_XY = [[3,3],[9,3],[15,3],[3,9],[9,9],[15,9],[3,15],[9,15],[15,15]];
 const HOSHI_IDX = new Set(HOSHI_XY.map(([x,y]) => y * SIZE + x));
 
 function idx(x, y) { return y * SIZE + x; }
@@ -1550,6 +1553,7 @@ const state = {
   koPoint: null,                          // Fix 7: 1-Ply-Ko-Punkt (Index oder null)
   sgfMoves: [],                           // Zugfolge für SGF-Export
   resignedBy: null,                       // Farbe, die aufgegeben hat (für Anzeige + SGF RE[+R])
+  finalMargin: null,                      // zuletzt berechneter Punktestand, z.B. "Schwarz +34.5"
   scoringMode: 'area',                    // 'area' (chinesisch) oder 'territory' (japanisch)
   /* Bug-Report-Daten: Diagnose pro KI-Zug + exakter Zustand VOR dem letzten
      KI-Zug. Motivation: der Hänger nach Zug 185 (Session 15.7.) war nicht
@@ -1671,7 +1675,7 @@ function resetGame() {
     consecutivePasses: 0, moveCount: 0, gameOver: false, lastMove: null,
     koPoint: null,                         // Fix 7
     sgfMoves: [],
-    resignedBy: null,
+    resignedBy: null, finalMargin: null,
     log: [], aiThinking: false, deadStones: new Set(), undoStack: [],
     aiDiag: [], lastAIRequest: null, aiReqT0: 0, aiReqBudget: 0
   });
@@ -1776,8 +1780,11 @@ function showFinalScore() {
   }
   diff = Math.abs(scoreB - scoreW);
   winner = scoreB > scoreW ? 'Schwarz' : 'Weiß';
+  /* Für die Aufgabe-Anzeige mitnehmen: dort gewinnt formal der Gegner,
+     der Punktestand ist aber trotzdem die interessante Information. */
+  state.finalMargin = `${winner} +${diff.toFixed(1)}`;
   document.getElementById('final-label').textContent = label;
-  document.getElementById('final-score').textContent = `${winner} +${diff.toFixed(1)}`;
+  document.getElementById('final-score').textContent = state.finalMargin;
   document.getElementById('territory-panel').style.display = 'flex';
   /* PolicyNet-Training bleibt bewusst auf Area-Scoring — das Netz wurde
      durchgängig darauf kalibriert; ein Wechsel der Anzeige-Wertung soll
@@ -1819,10 +1826,16 @@ function applyAIResult(result, reqId, netInp, netPriors, netHidden) {
     const kiName = state.aiColor === 1 ? '● Schwarz' : '○ Weiß';
     state.log.push(`— ${kiName} (KI) gibt auf —`);
     if (result.info) state.log.push(`   ↳ ${result.info}`);
+    /* Auch bei Aufgabe auswerten: formal gewinnt der Gegner ohne Zahl, aber
+       die Frage "wie hoch stand ich?" soll beantwortet bleiben — also
+       dieselbe Prozedur wie beim regulären Ende (tote Steine entfernen,
+       Gebiet zählen) und den Stand als Zusatz zum Ergebnis anzeigen. */
+    resolveLifeAndDeath();
+    showFinalScore();
+    const gewinner = state.aiColor === 1 ? 'Weiß' : 'Schwarz';
     document.getElementById('final-label').textContent = 'Aufgabe';
     document.getElementById('final-score').textContent =
-      state.aiColor === 1 ? 'Weiß gewinnt' : 'Schwarz gewinnt';
-    document.getElementById('territory-panel').style.display = 'flex';
+      `${gewinner} gewinnt (Stand ${state.finalMargin || '–'})`;
   } else {
     pass();
     if (result.info) state.log.push(`   ↳ ${result.info}`);
