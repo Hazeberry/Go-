@@ -1910,16 +1910,27 @@ function applyAIResult(result, reqId, netInp, netPriors, netHidden) {
     const kiName = state.aiColor === 1 ? '● Schwarz' : '○ Weiß';
     state.log.push(`— ${kiName} (KI) gibt auf —`);
     if (result.info) state.log.push(`   ↳ ${result.info}`);
-    /* Auch bei Aufgabe auswerten: formal gewinnt der Gegner ohne Zahl, aber
-       die Frage "wie hoch stand ich?" soll beantwortet bleiben — also
-       dieselbe Prozedur wie beim regulären Ende (tote Steine entfernen,
-       Gebiet zählen) und den Stand als Zusatz zum Ergebnis anzeigen. */
+    /* Stand ermitteln, aber das Brett dabei NICHT anfassen. Eine Aufgabe
+       beendet die Partie sofort — es wird nichts ausgezählt, also darf auch
+       nichts vom Brett verschwinden. Vorher lief hier resolveLifeAndDeath()
+       direkt: Nach der Aufgabe verschwanden plötzlich Steine, die niemand
+       geschlagen hatte ("! 30 tote Steine entfernt"), und die Gefangenen-
+       Anzeige sprang von 6 auf 36. Jetzt: auswerten, Zahl merken, Brett,
+       Gefangene, Tote und Protokoll exakt wiederherstellen. */
+    const _bSave = cloneBoard(state.board);
+    const _cSave = {...state.captures};
+    const _dSave = state.deadStones;
+    const _logLen = state.log.length;
     resolveLifeAndDeath();
     showFinalScore();
+    const stand = state.finalMargin;
+    state.board = _bSave; state.captures = _cSave; state.deadStones = _dSave;
+    state.log.length = _logLen;          /* "tote Steine entfernt" zurücknehmen */
+    drawStateToCache();
     const gewinner = state.aiColor === 1 ? 'Weiß' : 'Schwarz';
     document.getElementById('final-label').textContent = 'Aufgabe';
     document.getElementById('final-score').textContent =
-      `${gewinner} gewinnt (Stand ${state.finalMargin || '–'})`;
+      `${gewinner} gewinnt (Stand ${stand || '–'})`;
   } else {
     pass();
     if (result.info) state.log.push(`   ↳ ${result.info}`);
