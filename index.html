@@ -1532,7 +1532,12 @@ function getAIMove(board, aiColor, histHashes, captures, mc, diff, reqId, koPoin
   if (wantsToPass) {
     let ownInAtari = false;
     for (let k = 0; k < BOARD_SIZE; k++) {
-      if (_crisisOwn[k] === 100) { ownInAtari = true; break; }
+      /* gegen den PARAMETER prüfen, nicht gegen die Literalkonstante:
+         crisisAtari ist im Dashboard einstellbar (0–200). Stand hier 100
+         fest, hörte die Atari-Erkennung bei jedem abweichenden Wert still
+         auf zu greifen — die KI hätte gepasst, obwohl eigene Gruppen im
+         Atari stehen. Zeile 1584 macht es bereits so. */
+      if (_crisisOwn[k] >= PARAMS.crisisAtari) { ownInAtari = true; break; }
     }
     const opp = aiColor === 1 ? 2 : 1;
     buildCrisisMap(board, opp);
@@ -1882,9 +1887,18 @@ function showFinalScore() {
 }
 
 function applyAIResult(result, reqId, netInp, netPriors, netHidden) {
-  if (!result || reqId !== state.aiRequestId) {
-    state.aiThinking = false; updateAIStatus(); return;
-  }
+  /* Veraltete Antwort: aiThinking gehört dem NEUEREN Request und darf hier
+     nicht angefasst werden. Vorher wurde es hier gelöscht, obwohl der
+     nachfolgende Request noch rechnete — mit drei Folgen:
+       · der Watchdog des neuen Requests bricht sich selbst ab
+         (er prüft `if (!state.aiThinking) return;`) → kein Hänger-Schutz
+       · der Rückgängig-Knopf wird mitten in der Rechnung wieder aktiv,
+         und undo() lässt sich ausführen (Guard prüft aiThinking) — die
+         danach eintreffende Antwort setzt dann einen Stein auf ein Brett,
+         das es so nicht mehr gibt
+       · die Statusanzeige springt auf „KI aktiv", während sie noch denkt
+     fallbackToMainThread macht es an derselben Stelle bereits richtig. */
+  if (!result || reqId !== state.aiRequestId) return;
   if (state.gameOver || state.currentPlayer !== state.aiColor) {
     state.aiThinking = false; updateAIStatus(); return;
   }
