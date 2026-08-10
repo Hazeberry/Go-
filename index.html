@@ -1379,19 +1379,26 @@ function mctsPUCT(board, aiColor, captures, rootScored, koPoint) {
       }
       if (!node.kids || !node.kids.length) break;   /* terminal */
       const sq = Math.sqrt(Math.max(1, node.N));
+      /* FPU aus Sicht des Ziehenden (nicht der KI). A/B 76 gepaarte Stellungen,
+         scharfer + flacher Prior: ΔQ ±0,005, Baumform 4,11→7,89 Kinder/Knoten.
+         Semantikfix, kein Stärkeeffekt — Explorationsterm überdeckt ±0,45 ab
+         ~40 Elternbesuchen. Nicht erneut A/B-testen. */
+      const persp = color === aiColor ? 1 : -1;
       let best = null, bs = -Infinity;
       for (const k of node.kids) {
         /* Fix #5: First-Play-Urgency. Unbesuchte Knoten bekamen bisher
            q=0 (neutral) — nach der ersten Simulation mit negativem Wert
            wurden Geschwister nie exploriert. FPU gibt ihnen einen
-           optimistischen Startwert und erzwingt so breitere Exploration. */
-        const q = k.N ? k.W / k.N : PARAMS.mctsFPU;
+           optimistischen Startwert und erzwingt so breitere Exploration.
+           W und amafW liegen immer aus KI-Sicht vor, werden also gespiegelt;
+           die FPU-Konstante NICHT — sie ist bereits die Sicht des Ziehenden. */
+        const q = k.N ? (k.W / k.N) * persp : PARAMS.mctsFPU;
         let blended = q;
         if (rave && k.amafN) {
           const beta = Math.sqrt(raveK / (3 * node.N + raveK));
-          blended = (1 - beta) * q + beta * (k.amafW / k.amafN);
+          blended = (1 - beta) * q + beta * (k.amafW / k.amafN) * persp;
         }
-        const s = (color === aiColor ? blended : -blended) + c * k.P * sq / (1 + k.N);
+        const s = blended + c * k.P * sq / (1 + k.N);
         if (s > bs) { bs = s; best = k; }
       }
       const opp = color === 1 ? 2 : 1;
