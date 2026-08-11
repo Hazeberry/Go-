@@ -83,18 +83,41 @@
    playGame führt den Zustand jetzt pro Farbe und spielt ihn vor
    jedem Zug ein. Beide Seiten verhalten sich wie im echten Spiel.
 
-   ── Offener Befund: Tree-Reuse trifft trotzdem nie ─────────────
+   ── Tree-Reuse trifft nie — und das ist normal ─────────────────
    Nach dem Fix wird _tryReuseSubtree aufgerufen (58× in 60 Zügen),
    findet aber KEINEN Treffer. Die Mechanik ist in Ordnung — die
    Brettdifferenz ist exakt 1 Feld —, der Gegnerzug liegt nur nie
-   unter den 8 vorhergesagten Kindern. Ursache: innere MCTS-Knoten
-   werden mit quickEval expandiert, die Wurzel mit dem vollen
-   evaluateMove. quickEval kennt weder Ecken noch Sternpunkte, also
-   sind seine Top-8 in der Eröffnung Rauschen (beobachtet: Gegner
-   spielt D16/D4/Q4, Kinder liegen verstreut im Zentrum). Das
-   betrifft nicht nur den Reuse, sondern den gesamten Baum
-   unterhalb der Wurzel — vermutlich der Grund, warum mehr
-   Simulationen bisher kaum Spielstärke bringen.
+   unter den 8 vorhergesagten Kindern.
+
+   ACHTUNG, hier stand eine falsche Erklärung: Innere Knoten werden
+   mit quickEval expandiert, die Wurzel mit dem vollen evaluateMove,
+   und quickEval kennt weder Ecken noch Sternpunkte — daraus wurde
+   geschlossen, der Baum wachse in Richtungen, die nie gespielt
+   werden, und das erkläre die geringe Wirkung zusätzlicher
+   Simulationen. Beides wurde widerlegt:
+     · Expansion testweise auf evaluateMove umgestellt (quickEval
+       filtert auf die besten 24 vor, sonst unbezahlbar): Die
+       Trefferquote steigt nur von 3 % auf 5 % — also gar nicht.
+       Ein Suchergebnis weicht eben von einer heuristischen
+       Reihenfolge ab; niedrige Reuse-Trefferquoten sind für
+       Engines ohne Policy-Netz der Normalfall, kein Defekt.
+     · 64 gepaarte Partien mit dieser Expansion: 25 : 39 (61 %),
+       p = 0.10, Intervall 49–73 %. Erster Lauf 69 %, Replikation
+       53 % — kein belegter Effekt. Kostet dabei konsistent 10 %
+       der Simulationen (319 → 287), ist also eher leicht negativ.
+   Nicht erneut angehen, ohne vorher ein Policy-Netz zu haben, das
+   die Expansionsreihenfolge lernt statt sie zu raten.
+
+   ── Was in diesem Projekt tatsächlich gewirkt hat ──────────────
+   Drei Suchparameter-Studien, drei Mal derselbe Verlauf: ein
+   vielversprechender Erstbefund, der bei der Wiederholung Richtung
+   50 % zurückfällt (rolloutSample 70→58→55 %, Expansion 69→53 %,
+   FPU-Vorzeichen neutral bei ΔQ ±0.005). Gewirkt haben ausnahmslos
+   KORREKTHEITSFEHLER — der 32-Bit-Epochen-Überlauf (er allein
+   erzeugte den 17:3-Farbeffekt), der Tree-Reuse-Crash, das
+   Ko-Leck, das Steine-Füttern. Keine einzige Optimierung. Wer hier
+   weitermacht, sollte zuerst nach Fehlern suchen, nicht nach
+   Stellschrauben.
 
    ── Messstand (84 Partien über drei Läufe) ─────────────────────
    rolloutSample 16 / mctsRolloutDepth 12 gegen 32/24: 60 % für den
