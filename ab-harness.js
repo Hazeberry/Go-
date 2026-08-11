@@ -94,30 +94,64 @@
    und quickEval kennt weder Ecken noch Sternpunkte — daraus wurde
    geschlossen, der Baum wachse in Richtungen, die nie gespielt
    werden, und das erkläre die geringe Wirkung zusätzlicher
-   Simulationen. Beides wurde widerlegt:
-     · Expansion testweise auf evaluateMove umgestellt (quickEval
-       filtert auf die besten 24 vor, sonst unbezahlbar): Die
-       Trefferquote steigt nur von 3 % auf 5 % — also gar nicht.
-       Ein Suchergebnis weicht eben von einer heuristischen
-       Reihenfolge ab; niedrige Reuse-Trefferquoten sind für
-       Engines ohne Policy-Netz der Normalfall, kein Defekt.
-     · 64 gepaarte Partien mit dieser Expansion: 25 : 39 (61 %),
-       p = 0.10, Intervall 49–73 %. Erster Lauf 69 %, Replikation
-       53 % — kein belegter Effekt. Kostet dabei konsistent 10 %
-       der Simulationen (319 → 287), ist also eher leicht negativ.
-   Nicht erneut angehen, ohne vorher ein Policy-Netz zu haben, das
-   die Expansionsreihenfolge lernt statt sie zu raten.
+   Simulationen. Zwei Messungen dazu, mit UNTERSCHIEDLICHEM Status:
 
-   ── Was in diesem Projekt tatsächlich gewirkt hat ──────────────
-   Drei Suchparameter-Studien, drei Mal derselbe Verlauf: ein
-   vielversprechender Erstbefund, der bei der Wiederholung Richtung
-   50 % zurückfällt (rolloutSample 70→58→55 %, Expansion 69→53 %,
-   FPU-Vorzeichen neutral bei ΔQ ±0.005). Gewirkt haben ausnahmslos
-   KORREKTHEITSFEHLER — der 32-Bit-Epochen-Überlauf (er allein
-   erzeugte den 17:3-Farbeffekt), der Tree-Reuse-Crash, das
-   Ko-Leck, das Steine-Füttern. Keine einzige Optimierung. Wer hier
-   weitermacht, sollte zuerst nach Fehlern suchen, nicht nach
-   Stellschrauben.
+     · WIDERLEGT (die Erklärung): Expansion testweise auf
+       evaluateMove umgestellt (quickEval filtert auf die besten 24
+       vor, sonst unbezahlbar). Die Quote, mit der der Baum den
+       tatsächlich gespielten Gegnerzug unter seinen Kindern hat,
+       steigt nur von 3 % auf 5 % — also gar nicht. Ein Suchergebnis
+       weicht eben von einer heuristischen Reihenfolge ab; niedrige
+       Reuse-Trefferquoten sind für Engines ohne Policy-Netz der
+       Normalfall, kein Defekt.
+
+     · NICHT BELEGT, aber auch nicht widerlegt (die Wirkung):
+       64 gepaarte Partien, 25 : 39 (61 %), p = 0.10, Intervall
+       49–73 %. Erster Lauf 69 %, Replikation 53 %. Ein echter
+       Effekt von bis zu +23 Prozentpunkten ist mit diesen Daten
+       VEREINBAR — die Tür ist nicht zu. Gegen ein Weiterverfolgen
+       spricht die Kosten-Nutzen-Rechnung, nicht ein Beweis:
+       konsistent −10 % Simulationen (319 → 287), plus die
+       Basisrate (siehe Selektionsgesetz unten). Für Signifikanz
+       bei 61 % bräuchte es rund 200 Partien ≈ 4–5 h Rechenzeit.
+
+   ── Regelbuch: wann wird eingebaut? ────────────────────────────
+   Korrektheitsfix mit Null-Kosten wird eingebaut, AUCH bei
+   Null-Effekt (Semantik richtig, Risiko gemessen, spätere
+   Änderungen setzen auf sauberer Basis auf). So geschehen beim
+   FPU-Vorzeichen: ΔQ ±0.005, Sims 411 : 419, trotzdem gemergt.
+   Optimierung mit Kosten und unbewiesenem Nutzen wird abgelehnt.
+   So geschehen bei rolloutSample (60 %, p = 0.10) und bei der
+   evaluateMove-Expansion (61 %, p = 0.10, −10 % Sims).
+   Wichtig: Ein abgelehnter Befund gehört als Kommentar an die
+   Codestelle, sonst wird derselbe Fehler in einem Jahr erneut
+   „entdeckt" und die Untersuchungskosten fallen zweimal an.
+
+   ── Triage: wann lohnt ein Bestätigungslauf? ───────────────────
+   0 von 3 Replikationen sind bei Selektion auf vielversprechende
+   Erstläufe kein Pech, sondern der Erwartungswert (Winner's
+   Curse — der Erstlauf der Expansion lag mit p = 0.050 exakt auf
+   der Schwelle). Daher: Erstlauf ist Hypothesengenerierung, nicht
+   Beleg. Bestätigungslauf nur ab etwa 75 % Siegrate oder wenn
+   Korrektheit betroffen ist. Das spart die 4–5 h systematisch.
+
+   ── Selektionsgesetz für künftige Experimente ──────────────────
+   Die präzise Formulierung ist NICHT „Suchparameter wirken nicht",
+   sondern: Alle drei Nullergebnisse waren UMGEWICHTUNGEN DESSELBEN
+   SIGNALS. quickEval und der MoE-Evaluator teilen dieselben
+   Liberty- und Capture-Primitive — die Expansion umzustellen
+   tauscht also vor allem die Reihenfolge nahezu gleichwertiger
+   Kandidaten. FPU ist Suchreihenfolge, rolloutSample ist
+   Stichprobengröße. Gewirkt hat dagegen ausnahmslos, was NEUE
+   Information einbrachte oder FALSCHE beseitigte: der 32-Bit-
+   Epochen-Überlauf (er allein erzeugte den 17:3-Farbeffekt), der
+   Tree-Reuse-Crash, das Ko-Leck, das Steine-Füttern.
+   Daraus das Kriterium: Bringt der Vorschlag Information ins
+   System, die vorher nicht drin war? Wenn nein, ist Nullergebnis
+   die Erwartung. Für ein Policy-Netz heißt das konkret: Nur
+   Distillation aus externen Daten (z. B. KataGo) trägt neue
+   Information — Selbstspiel-Imitation der eigenen Heuristik wäre
+   wieder dasselbe Signal in neuer Verpackung.
 
    ── Messstand (84 Partien über drei Läufe) ─────────────────────
    rolloutSample 16 / mctsRolloutDepth 12 gegen 32/24: 60 % für den
