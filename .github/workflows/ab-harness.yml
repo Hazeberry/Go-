@@ -50,6 +50,25 @@ jobs:
           echo "GAMES=$IN_GAMES" >> "$GITHUB_ENV"
           echo "SEED=$IN_SEED"   >> "$GITHUB_ENV"
 
+      # Hosted Runner teilen sich Hardware mit fremden Jobs — die Leistung
+      # schwankt zwischen Läufen. Da das Zeitbudget fest ist, schlägt das
+      # direkt auf Sims/Zug durch und damit auf die Züge selbst. Ohne diesen
+      # Kontext lässt sich hinterher nicht entscheiden, ob ein Unterschied in
+      # der Siegrate von der Konfiguration kam oder vom Runner.
+      - name: Runner-Kontext
+        run: |
+          set -euo pipefail
+          mkdir -p ergebnisse
+          {
+            echo "Lauf:      #${GITHUB_RUN_NUMBER} · $(date -u +%FT%TZ)"
+            echo "Commit:    ${GITHUB_SHA}"
+            echo "Runner:    ${RUNNER_OS} ${RUNNER_ARCH} · ${GITHUB_RUNNER_IMAGE:-ubuntu-latest}"
+            echo "Node:      $(node -v)"
+            echo "Kerne:     $(nproc)"
+            echo "CPU:       $(awk -F': ' '/model name/{print $2; exit}' /proc/cpuinfo)"
+            echo "RAM:       $(awk '/MemTotal/{printf "%.1f GB", $2/1048576}' /proc/meminfo)"
+          } | tee "ergebnisse/runner-run${GITHUB_RUN_NUMBER}.txt"
+
       - name: Self-Play-Lauf
         run: |
           set -euo pipefail
@@ -71,6 +90,21 @@ jobs:
           {
             echo "## A/B-Harness — ${GAMES} Partien, Seed ${SEED}"
             echo
+            echo "> Sims/Zug unten mitlesen: gleicher Seed erzeugt nur bei"
+            echo "> gleicher Simulationszahl gleiche Züge. Weichen zwei Läufe"
+            echo "> dort ab, ist ein Unterschied in der Siegrate nicht der"
+            echo "> Konfiguration zuzuschreiben."
+            echo
+            if [ -f "ergebnisse/runner-run${GITHUB_RUN_NUMBER}.txt" ]; then
+              echo '<details><summary>Runner-Kontext</summary>'
+              echo
+              echo '```'
+              cat "ergebnisse/runner-run${GITHUB_RUN_NUMBER}.txt"
+              echo '```'
+              echo
+              echo '</details>'
+              echo
+            fi
             if [ -f "$LOG" ]; then
               echo '```'
               tail -n 30 "$LOG"
