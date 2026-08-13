@@ -153,6 +153,48 @@
    Information — Selbstspiel-Imitation der eigenen Heuristik wäre
    wieder dasselbe Signal in neuer Verpackung.
 
+   ── Erster belegter Parametereffekt: mctsValueScale ────────────
+   350 (Baseline) gegen 1000, gepaart, resignEnabled=0 auf BEIDEN
+   Seiten, Zug-Limit 600. Zwei unabhängige Seeds:
+     Seed 2026, 30 Paare: 41 : 19 (68.3 %), p = 0.006
+     Seed 4711, 20 Paare: 27 : 13 (67.5 %), p = 0.038
+     zusammen 100 Partien: 68 : 32 (68.0 %), p = 0.0004
+     diskordante Paare zusammen: 22 : 4, p = 0.0005
+   Sims/Zug 483 gegen 478 — kein Geschwindigkeitsartefakt. Die
+   Effektstärke repliziert (68.3 → 67.5 %), also kein Winner's
+   Curse. NICHT ERNEUT TESTEN: 350 schlägt 1000, deutlich.
+
+   Richtung beachten: Die Intuition „größere Skala = mehr
+   Auflösung = mehr Information" ist WIDERLEGT. tanh(v/scale)
+   sättigt bei scale=350 in 20 % der Stellungen ab Zug 250
+   (gemessen, |evaluateBoard| Median 101, 90-Perzentil 419). Diese
+   Sättigung ist offenbar Nutzen, nicht Verlust — sie wirkt wie
+   Winsorizing und dämpft einzelne Ausreißer-Rollouts. mctsValueScale
+   ist damit eher ein Robustheitsparameter als eine Wertebereichs-
+   Skalierung.
+
+   Lokalisierung — und ihre Grenze: Gebiet aus Sicht der Baseline
+   bei Zug 150 −1.1 · 200 +0.5 · 250 +4.3 · Ende +24.6. Der Effekt
+   entsteht also spät. ABER: Ein monoton wachsender Vorsprung ist
+   die generische Signatur JEDES Stärkeunterschieds — die Form
+   unterscheidet nicht zwischen „Sättigung wirkt spät" und „B ist
+   allgemein schwächer". Wer den Mechanismus belegen will, braucht
+   einen Phasentausch (350 durchgehend gegen 350-bis-Zug-200-dann-
+   1000). Der geht rein im Harness: cfg wird in der Zugschleife pro
+   Zug angewandt, eine Funktion von mc genügt, index.html bleibt
+   unberührt. Vorsicht dort beim Tree-Reuse — am Umschaltpunkt kann
+   ein wiederverwendeter Knoten N/W aus der alten Skala mitbringen.
+
+   ── Kennzahlen, die bei kleinen Stichproben NICHT gelesen werden ─
+   Benson-Pässe und Passzahlen. Zwei Läufe mit je 40 Partien:
+   Benson S 28 / W 45 gegen S 43 / W 0, Pässe 365/647 gegen 334/249.
+   Die Streuung ist um ein Vielfaches größer als die der Siegrate,
+   weil beide Größen stark am einzelnen Eröffnungsverlauf hängen.
+   Kein Messfehler — aber unter mehreren hundert Partien ist dort
+   kein Muster von Rauschen unterscheidbar. Auch nicht beiläufig
+   interpretieren; ich habe aus der ersten Zahlenreihe eine
+   Pass-Asymmetrie abgeleitet, die der zweite Lauf umdrehte.
+
    ── Messstand (84 Partien über drei Läufe) ─────────────────────
    rolloutSample 16 / mctsRolloutDepth 12 gegen 32/24: 60 % für den
    Kandidaten, p = 0.10 — nicht signifikant, und der Vorsprung
