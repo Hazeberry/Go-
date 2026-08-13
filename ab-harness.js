@@ -447,6 +447,17 @@ const driver = `
       agg.area[k].push(r.area[k].b - r.area[k].w);   /* Differenz aus Schwarz-Sicht */
     const diffEnd = r.score0.b - r.score0.w;
     agg.area.end.push(diffEnd);
+
+    /* Nach Konfiguration: Q liegt bereits in der Sicht der ziehenden Farbe vor,
+       ist also direkt zuordenbar. Gebiet muss auf A-Sicht gedreht werden. */
+    if (r.q50[aColor] !== null) agg.phase.q50.A.push(r.q50[aColor]);
+    if (r.q50[bColor] !== null) agg.phase.q50.B.push(r.q50[bColor]);
+    if (r.q75[aColor] !== null) agg.phase.q75.A.push(r.q75[aColor]);
+    if (r.q75[bColor] !== null) agg.phase.q75.B.push(r.q75[bColor]);
+    const vorz = aColor === 1 ? 1 : -1;
+    for (const k of Object.keys(r.area))
+      agg.phase.areaA[k].push(vorz * (r.area[k].b - r.area[k].w));
+    agg.phase.areaA.end.push(vorz * diffEnd);
     for (const [key, col] of [['A', aColor], ['B', bColor]]) {
       const s = r.st[col];
       agg[key].moves += s.moves; agg[key].sims += s.sims; agg[key].timeMs += s.timeMs;
@@ -464,6 +475,12 @@ const driver = `
       passFirst: {1: [], 2: []}, passTotal: {1: 0, 2: 0}, passBenson: {1: 0, 2: 0},
       q50: {1: [], 2: []}, q75: {1: [], 2: []},
       area: {M150: [], M200: [], M250: [], end: []},
+      /* Dieselben Phasen-Kennzahlen, aber nach KONFIGURATION gruppiert statt
+         nach Farbe. Ohne das beantwortet der Harness die Frage nicht, für die
+         er gebaut ist: WO in der Partie ein Parameter wirkt. Gebiet ist
+         nullsummig, deshalb genügt die A-Sicht — B ist das Negative. */
+      phase: {q50: {A: [], B: []}, q75: {A: [], B: []},
+              areaA: {M150: [], M200: [], M250: [], end: []}},
       anomalies: 0
     };
   }
@@ -487,6 +504,12 @@ const driver = `
       + ' · Ende ' + fmt(mean(agg.area.end)));
     console.log('Q 50%/75%:  Schwarz ' + fmt(mean(agg.q50[1]), 2) + ' / ' + fmt(mean(agg.q75[1]), 2)
       + '   Weiß ' + fmt(mean(agg.q50[2]), 2) + ' / ' + fmt(mean(agg.q75[2]), 2));
+    console.log('PHASE aus A-Sicht — Gebiet (Punkte, + = A vorn):  Zug 150 ' + fmt(mean(agg.phase.areaA.M150))
+      + ' · 200 ' + fmt(mean(agg.phase.areaA.M200)) + ' · 250 ' + fmt(mean(agg.phase.areaA.M250))
+      + ' · Ende ' + fmt(mean(agg.phase.areaA.end))
+      + '   [n=' + agg.phase.areaA.end.length + ']');
+    console.log('PHASE Q 50%/75% je Konfiguration:  A ' + fmt(mean(agg.phase.q50.A), 2) + ' / ' + fmt(mean(agg.phase.q75.A), 2)
+      + '   B ' + fmt(mean(agg.phase.q50.B), 2) + ' / ' + fmt(mean(agg.phase.q75.B), 2));
     console.log('PASS: erster Ø Zug S ' + fmt(mean(agg.passFirst[1]), 0) + ' / W ' + fmt(mean(agg.passFirst[2]), 0)
       + ' · gesamt S ' + agg.passTotal[1] + ' / W ' + agg.passTotal[2]
       + ' · Benson S ' + agg.passBenson[1] + ' / W ' + agg.passBenson[2]);
@@ -538,6 +561,7 @@ const driver = `
       + ' · Schwarz-Sweep ' + konKordantS + ' · Weiß-Sweep ' + konKordantW
       + '   → diskordante Paare tragen den Parametereffekt, Sweeps den Farbeffekt');
     printAgg(agg, AB.paired * 2);
+    raw.phase = agg.phase;
   } else {
     /* ═══ Standard-Modus ═══ */
     console.log('Modus: ' + AB.games + ' Partien (Farbwechsel)\\n');
@@ -570,6 +594,7 @@ const driver = `
         + ' · ' + r.moves + ' Züge · ' + mins.toFixed(1) + ' min');
     }
     printAgg(agg, AB.games);
+    raw.phase = agg.phase;
     if (AB.games < 20)
       console.log('Hinweis: ' + AB.games + ' Partien sind Rauschen — belastbar ab ≥ 20–30.');
   }
