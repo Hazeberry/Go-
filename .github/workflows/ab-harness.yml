@@ -1,0 +1,93 @@
+name: A/B-Harness
+
+# Manueller Self-Play-Messlauf. Die KI-Logik wird von ab-harness.js zur
+# Laufzeit direkt aus index.html extrahiert — gemessen wird also exakt der
+# Stand, der auf GitHub Pages läuft, ohne Code-Duplikat.
+#
+# Wichtig zur Reproduzierbarkeit: gleicher Seed erzeugt gleiche Züge NUR bei
+# gleichem Zeitbudget. Das Budget ist Wall-Clock pro Zug; ein langsamerer
+# Runner schafft in denselben 250 ms weniger Simulationen und spielt damit
+# anders. Läufe sind untereinander vergleichbar, nicht bitgenau gegen lokale.
+
+on:
+  workflow_dispatch:
+    inputs:
+      games:
+        description: 'Partienzahl (belastbar ab 20–30)'
+        required: true
+        default: '20'
+      seed:
+        description: 'Zufalls-Seed (fest = reproduzierbar)'
+        required: true
+        default: '2026'
+
+jobs:
+  selfplay:
+    runs-on: ubuntu-latest
+    # 20 Partien × bis zu 400 Zügen × 250 ms ≈ 35 min, plus Overhead der
+    # Bewertung. Großzügig gesetzt, damit auch 100-Partien-Läufe durchlaufen.
+    timeout-minutes: 300
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # Eingaben werden über env übergeben und geprüft, statt sie direkt in
+      # die Shell-Zeile zu interpolieren (sonst Script-Injection über das
+      # Dispatch-Formular).
+      - name: Eingaben prüfen
+        env:
+          IN_GAMES: ${{ inputs.games }}
+          IN_SEED: ${{ inputs.seed }}
+        run: |
+          set -euo pipefail
+          case "$IN_GAMES" in ''|*[!0-9]*) echo "::error::games muss eine positive ganze Zahl sein: '$IN_GAMES'"; exit 2;; esac
+          case "$IN_SEED"  in ''|*[!0-9]*) echo "::error::seed muss eine nicht-negative ganze Zahl sein: '$IN_SEED'"; exit 2;; esac
+          [ "$IN_GAMES" -ge 1 ] || { echo "::error::games muss ≥ 1 sein"; exit 2; }
+          echo "GAMES=$IN_GAMES" >> "$GITHUB_ENV"
+          echo "SEED=$IN_SEED"   >> "$GITHUB_ENV"
+
+      - name: Self-Play-Lauf
+        run: |
+          set -euo pipefail
+          mkdir -p ergebnisse
+          node ab-harness.js \
+            --games "$GAMES" \
+            --seed "$SEED" \
+            --budget 250 \
+            --json "ergebnisse/ab-${GAMES}p-seed${SEED}-run${GITHUB_RUN_NUMBER}.json" \
+            2>&1 | tee "ergebnisse/ab-${GAMES}p-seed${SEED}-run${GITHUB_RUN_NUMBER}.log"
+
+      # Der Aggregat-Block direkt in die Run-Übersicht, damit man das Ergebnis
+      # sieht, ohne das Artefakt herunterzuladen.
+      - name: Zusammenfassung
+        if: always()
+        run: |
+          set -euo pipefail
+          LOG="ergebnisse/ab-${GAMES}p-seed${SEED}-run${GITHUB_RUN_NUMBER}.log"
+          {
+            echo "## A/B-Harness — ${GAMES} Partien, Seed ${SEED}"
+            echo
+            if [ -f "$LOG" ]; then
+              echo '```'
+              tail -n 30 "$LOG"
+              echo '```'
+            else
+              echo '_Kein Log — der Lauf ist vor der ersten Ausgabe abgebrochen._'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # always(): Bei Timeout oder Abbruch ist wenigstens das Log noch da.
+      # Die JSON-Datei schreibt der Harness erst am Ende — ein abgebrochener
+      # Lauf liefert also nur das Log, und das ist die nützlichere Diagnose.
+      - name: Ergebnisse sichern
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ab-harness-${{ env.GAMES }}p-seed${{ env.SEED }}-run${{ github.run_number }}
+          path: ergebnisse/
+          if-no-files-found: warn
+          retention-days: 90
