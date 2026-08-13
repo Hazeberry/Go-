@@ -595,7 +595,24 @@ globalThis.PARAMS = {
   mctsRootChildren:  16,
   mctsChildren:       8,
   mctsRolloutDepth:  24,
-  mctsValueScale:   350,
+  /* Robustheitsparameter, KEINE Wertebereichs-Skalierung — trotz des Namens.
+     v = tanh(evaluateBoard / scale) staucht große Beträge; das dämpft einzelne
+     Ausreißer-Rollouts, bevor sie den Knotenmittelwert dominieren (Winsorizing).
+     Kleiner = stärkere Dämpfung, aber irgendwann sättigt alles und "klar
+     gewonnen" ist nicht mehr von "knapp vorn" unterscheidbar. Daher ein Optimum.
+     Gemessene Kurve (Kandidat gegen 350, je 40 gepaarte Partien):
+       100 → 45 % · 150 → 67.5 % · 200 → 62.5 % · 250 → 60 %
+       300 → 52.5 % · 500 → 45 % · 1000 → 32 % (100 Partien, p = 0.0004)
+     Plateau 150–250, Abfall zu beiden Seiten. Gewählt wurde die Mitte des
+     Plateaus, nicht der höchste Einzelpunkt (Winner's Curse). Bestätigungslauf
+     mit frischem Seed: 40:20 (66.7 %, p = 0.013), Komi-0 44:16 (73.3 %),
+     zusammen mit dem Erstlauf 65:35 über 100 Partien (65 %, p = 0.0035).
+     ACHTUNG resignQ: kleinere Skala ⇒ größere |Q| ⇒ die Aufgabeschwelle
+     resignQ = 0.95 wird FRÜHER erreicht. In Brettpunkten: bei 350 entsprach
+     sie −641, bei 200 entspricht sie −366. Gemessen wurde die Skala mit
+     resignEnabled = 0, diese Wechselwirkung ist also UNGEPRÜFT. Verhaltens-
+     erhaltend wäre resignQ ≈ 0.997 — nicht gesetzt, weil ungemessen. */
+  mctsValueScale:   200,
   mctsMaxDepth:      60,
   /* RAVE/AMAF + Tree-Reuse — Statistik-Hebel ohne Training */
   raveEnabled:         1,    // 0 = aus, reines PUCT wie vorher
