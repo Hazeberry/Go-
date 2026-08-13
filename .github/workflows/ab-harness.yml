@@ -4,22 +4,47 @@ name: A/B-Harness
 # Laufzeit direkt aus index.html extrahiert — gemessen wird also exakt der
 # Stand, der auf GitHub Pages läuft, ohne Code-Duplikat.
 #
-# Wichtig zur Reproduzierbarkeit: gleicher Seed erzeugt gleiche Züge NUR bei
-# gleichem Zeitbudget. Das Budget ist Wall-Clock pro Zug; ein langsamerer
-# Runner schafft in denselben 250 ms weniger Simulationen und spielt damit
-# anders. Läufe sind untereinander vergleichbar, nicht bitgenau gegen lokale.
+# Zur Reproduzierbarkeit — gemessen, nicht vermutet: Der Seed macht Läufe
+# NICHT reproduzierbar. Das Budget ist Wall-Clock pro Zug, die Zahl der
+# Simulationen pro Zug hängt also an der Maschinenlast. Zwei Läufe mit
+# identischem Seed UND identischer Konfiguration liefern nachweislich
+# verschiedene Partien (lokal verifiziert). Der Seed fixiert nur den
+# Zufallsstrom, nicht, an welcher Stelle er verbraucht wird.
+#
+# Für A/B ist das Rauschen, keine Verzerrung: es trifft A und B gleich.
+# Es erhöht aber die Varianz — Grund, warum die Partienzahl zählt und
+# warum der gepaarte Modus (gemeinsame Eröffnung, Farbtausch) vorzuziehen
+# ist. Gemessene Nullverteilung bei 20 Partien: 7:13 zwischen zwei
+# IDENTISCHEN Konfigurationen, alles von 30 % bis 70 % ist mit Zufall
+# vereinbar.
 
 on:
   workflow_dispatch:
     inputs:
       games:
-        description: 'Partienzahl (belastbar ab 20–30)'
+        description: 'Partienzahl im Standardmodus (ignoriert, wenn paired > 0)'
         required: true
         default: '20'
       seed:
-        description: 'Zufalls-Seed (fest = reproduzierbar)'
+        description: 'Zufalls-Seed. Fixiert den Zufallsstrom, macht Läufe aber NICHT reproduzierbar (Zeitbudget, s. Kopfkommentar)'
         required: true
         default: '2026'
+      paired:
+        description: 'Paare im gepaarten Modus (0 = Standardmodus). Gleiche Eröffnung, dann Farbtausch — trennt Parameter- von Farbeffekt'
+        required: false
+        default: '0'
+      maxmoves:
+        description: 'Zug-Limit pro Partie. Höher setzen, wenn resignEnabled=0 — sonst deckelt das Limit die Längenmessung'
+        required: false
+        default: '400'
+      params_a:
+        description: 'PARAMS für A (Baseline), z. B. mctsValueScale=350,resignEnabled=0'
+        required: false
+        default: ''
+      params_b:
+        description: 'PARAMS für B (Kandidat), z. B. mctsValueScale=1000,resignEnabled=0'
+        required: false
+        default: ''
 
 jobs:
   selfplay:
@@ -42,13 +67,44 @@ jobs:
         env:
           IN_GAMES: ${{ inputs.games }}
           IN_SEED: ${{ inputs.seed }}
+          IN_PAIRED: ${{ inputs.paired }}
+          IN_MAXMOVES: ${{ inputs.maxmoves }}
+          IN_A: ${{ inputs.params_a }}
+          IN_B: ${{ inputs.params_b }}
         run: |
           set -euo pipefail
-          case "$IN_GAMES" in ''|*[!0-9]*) echo "::error::games muss eine positive ganze Zahl sein: '$IN_GAMES'"; exit 2;; esac
-          case "$IN_SEED"  in ''|*[!0-9]*) echo "::error::seed muss eine nicht-negative ganze Zahl sein: '$IN_SEED'"; exit 2;; esac
-          [ "$IN_GAMES" -ge 1 ] || { echo "::error::games muss ≥ 1 sein"; exit 2; }
-          echo "GAMES=$IN_GAMES" >> "$GITHUB_ENV"
-          echo "SEED=$IN_SEED"   >> "$GITHUB_ENV"
+          case "$IN_GAMES"    in ''|*[!0-9]*) echo "::error::games muss eine positive ganze Zahl sein: '$IN_GAMES'"; exit 2;; esac
+          case "$IN_SEED"     in ''|*[!0-9]*) echo "::error::seed muss eine nicht-negative ganze Zahl sein: '$IN_SEED'"; exit 2;; esac
+          case "$IN_PAIRED"   in ''|*[!0-9]*) echo "::error::paired muss eine nicht-negative ganze Zahl sein: '$IN_PAIRED'"; exit 2;; esac
+          case "$IN_MAXMOVES" in ''|*[!0-9]*) echo "::error::maxmoves muss eine positive ganze Zahl sein: '$IN_MAXMOVES'"; exit 2;; esac
+          [ "$IN_GAMES"    -ge 1 ] || { echo "::error::games muss ≥ 1 sein"; exit 2; }
+          [ "$IN_MAXMOVES" -ge 1 ] || { echo "::error::maxmoves muss ≥ 1 sein"; exit 2; }
+
+          # params_a/params_b landen als Argument in der Kommandozeile. Nur
+          # schluessel=zahl,schluessel=zahl zulassen — alles andere (Anfuehrungs-
+          # zeichen, Semikolon, $(), Backticks) faellt hier durch.
+          PARAM_RE='^[A-Za-z_][A-Za-z0-9_]*=-?[0-9]+(\.[0-9]+)?(,[A-Za-z_][A-Za-z0-9_]*=-?[0-9]+(\.[0-9]+)?)*$'
+          for v in A B; do
+            eval "s=\$IN_$v"
+            if [ -n "$s" ] && ! printf '%s' "$s" | grep -Eq "$PARAM_RE"; then
+              echo "::error::params_$v muss die Form schluessel=zahl[,schluessel=zahl] haben: '$s'"; exit 2
+            fi
+          done
+
+          {
+            echo "GAMES=$IN_GAMES"
+            echo "SEED=$IN_SEED"
+            echo "PAIRED=$IN_PAIRED"
+            echo "MAXMOVES=$IN_MAXMOVES"
+            echo "PARAMS_A=$IN_A"
+            echo "PARAMS_B=$IN_B"
+          } >> "$GITHUB_ENV"
+
+          if [ "$IN_PAIRED" -gt 0 ]; then
+            echo "LABEL=${IN_PAIRED}paare-seed${IN_SEED}-run${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
+          else
+            echo "LABEL=${IN_GAMES}p-seed${IN_SEED}-run${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
+          fi
 
       # Hosted Runner teilen sich Hardware mit fremden Jobs — die Leistung
       # schwankt zwischen Läufen. Da das Zeitbudget fest ist, schlägt das
@@ -73,12 +129,23 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p ergebnisse
-          node ab-harness.js \
-            --games "$GAMES" \
-            --seed "$SEED" \
-            --budget 250 \
-            --json "ergebnisse/ab-${GAMES}p-seed${SEED}-run${GITHUB_RUN_NUMBER}.json" \
-            2>&1 | tee "ergebnisse/ab-${GAMES}p-seed${SEED}-run${GITHUB_RUN_NUMBER}.log"
+          ARGS=(--seed "$SEED" --budget 250 --maxmoves "$MAXMOVES")
+          if [ "$PAIRED" -gt 0 ]; then
+            ARGS+=(--paired "$PAIRED")
+          else
+            ARGS+=(--games "$GAMES")
+          fi
+          if [ -n "$PARAMS_A" ]; then ARGS+=(--A "$PARAMS_A"); fi
+          if [ -n "$PARAMS_B" ]; then ARGS+=(--B "$PARAMS_B"); fi
+          ARGS+=(--json "ergebnisse/ab-${LABEL}.json")
+
+          # Die effektive Kommandozeile mit ins Artefakt, damit der Lauf ohne
+          # das Actions-Log rekonstruierbar bleibt.
+          printf 'node ab-harness.js' >> "ergebnisse/runner-run${GITHUB_RUN_NUMBER}.txt"
+          printf ' %q' "${ARGS[@]}"   >> "ergebnisse/runner-run${GITHUB_RUN_NUMBER}.txt"
+          printf '\n'                 >> "ergebnisse/runner-run${GITHUB_RUN_NUMBER}.txt"
+
+          node ab-harness.js "${ARGS[@]}" 2>&1 | tee "ergebnisse/ab-${LABEL}.log"
 
       # Der Aggregat-Block direkt in die Run-Übersicht, damit man das Ergebnis
       # sieht, ohne das Artefakt herunterzuladen.
@@ -86,9 +153,15 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
-          LOG="ergebnisse/ab-${GAMES}p-seed${SEED}-run${GITHUB_RUN_NUMBER}.log"
+          LOG="ergebnisse/ab-${LABEL}.log"
           {
-            echo "## A/B-Harness — ${GAMES} Partien, Seed ${SEED}"
+            if [ "$PAIRED" -gt 0 ]; then
+              echo "## A/B-Harness — ${PAIRED} Paare (gepaart), Seed ${SEED}"
+            else
+              echo "## A/B-Harness — ${GAMES} Partien, Seed ${SEED}"
+            fi
+            echo
+            echo "**A:** \`${PARAMS_A:-Standard}\` · **B:** \`${PARAMS_B:-Standard}\` · Zug-Limit ${MAXMOVES}"
             echo
             echo "> Sims/Zug unten mitlesen: gleicher Seed erzeugt nur bei"
             echo "> gleicher Simulationszahl gleiche Züge. Weichen zwei Läufe"
@@ -121,7 +194,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ab-harness-${{ env.GAMES }}p-seed${{ env.SEED }}-run${{ github.run_number }}
+          name: ab-harness-${{ env.LABEL }}
           path: ergebnisse/
           if-no-files-found: warn
           retention-days: 90
