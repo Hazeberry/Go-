@@ -185,6 +185,30 @@
    unberührt. Vorsicht dort beim Tree-Reuse — am Umschaltpunkt kann
    ein wiederverwendeter Knoten N/W aus der alten Skala mitbringen.
 
+   ── Kurve über mctsValueScale (abgeschlossen) ──────────────────
+   Sieben Werte gegen die damalige Baseline 350, je 20 Paare
+   (1000 mit 50 Paaren), resignEnabled=0, Zug-Limit 600:
+     100 → 45.0 %   150 → 67.5 %   200 → 62.5 %   250 → 60.0 %
+     300 → 52.5 %   500 → 45.0 %  1000 → 32.0 %
+   Plateau bei 150–250, symmetrischer Abfall zu beiden Seiten. Der
+   Rückfall bei 100 ist der eigentliche Befund: Es gibt ein Optimum,
+   nicht "kleiner ist besser". Das bestätigt die Winsorizing-Deutung
+   an ihrer eigenen riskanten Vorhersage — zwei gegenläufige Kräfte,
+   Ausreißerdämpfung gegen Auflösungsverlust.
+   Einzelne Punkte NICHT lesen: bei sieben Tests rutscht einer per
+   Erwartung unter p = 0.05 (hier 150 mit p = 0.039). Gepoolt über
+   alle Werte unter 350: 94/160 = 58.8 %, p = 0.032.
+   Gewählt wurde 200 — die MITTE des Plateaus, nicht der höchste
+   Punkt 150. Der Maximalwert einer verrauschten Serie ist
+   systematisch überschätzt; genau dagegen steht die Triage-Regel.
+   Bestätigungslauf, Schwelle VOR dem Lauf auf ≥ 39/60 festgelegt:
+   40:20 (66.7 %, p = 0.013), Komi-0 44:16, diskordant 15:5.
+   Mit dem Erstlauf zusammen 65:35 über 100 Partien, p = 0.0035.
+   → Standard steht seit diesem Lauf auf 200. NICHT ERNEUT TESTEN.
+   Offen geblieben: die Wechselwirkung mit resignQ (siehe Kommentar
+   an der Parameterstelle in index.html) und der Phasentausch-Test,
+   der Sättigung von allgemeiner Stärke trennen würde.
+
    ── Kennzahlen, die bei kleinen Stichproben NICHT gelesen werden ─
    Benson-Pässe und Passzahlen. Zwei Läufe mit je 40 Partien:
    Benson S 28 / W 45 gegen S 43 / W 0, Pässe 365/647 gegen 334/249.
