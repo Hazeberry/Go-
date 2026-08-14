@@ -241,6 +241,35 @@
    die verallgemeinerbare Lehre für künftige Nullergebnisse.
    → resignQ bleibt 0.95. NICHT ERNEUT TESTEN.
 
+   ── Phasentausch: Mechanismus NICHT entschieden ────────────────
+   Frage: Wirkt die kleinere Skala, weil Sättigung speziell in der
+   Spätphase nützt, oder ist 1000 einfach durchgehend schwächer?
+   Die Lokalisierung konnte das nicht trennen — ein spät wachsender
+   Vorsprung ist die Signatur JEDES Stärkeunterschieds.
+   Drei Läufe, A überall mctsValueScale=200 konstant, 20 Paare je
+   Lauf, resignEnabled=0, Umschaltpunkt Zug 200:
+     R  1000 durchgehend        31:9  = 77.5 %  Schaden +27.5 Pp
+     L  200 früh / 1000 spät    25:15 = 62.5 %  Schaden +12.5 Pp
+     E  1000 früh / 200 spät    22:18 = 55.0 %  Schaden  +5.0 Pp
+   Vorhersagen waren vorab notiert und gegenläufig:
+     Sättigung-wirkt-spät:  L nahe R (+27.5), E nahe 0
+     generischer Effekt:    L ~ E ~ halber Schaden (+13.8)
+   ERGEBNIS: unentschieden. L trifft die generische Vorhersage fast
+   punktgenau, E liegt zwischen beiden. Der Unterschied L gegen E
+   sind DREI Partien bei je 40 — E allein p = 0.64, also Rauschen.
+   Belegt ist nur eine Ausschlussaussage: Die starke Version
+   ("Sättigung wirkt praktisch nur spät") passt nicht, denn dann
+   hätte E bei etwa 50 % liegen müssen.
+   Kontrollen haben gehalten: R meldet 0 Phasenwechsel, L und E je
+   40 bei 40 Partien. Sims/Zug innerhalb jedes Laufs unter 1 %
+   Abweichung. Die Baum-Verwerfung am Umschaltpunkt trifft L und E
+   gleichermaßen, der Vergleich L gegen E ist davon also unberührt;
+   nur der Bezug auf R (ohne Wechsel) trägt diese Asymmetrie.
+   NICHT WIEDERHOLEN ohne rund 200 Partien je Arm — bei 40 ist die
+   Frage nicht auflösbar. Das wären ~11 h für eine Erkenntnis ohne
+   direkten Spielgewinn; nach der Triage-Regel kein guter Tausch.
+   Kosten bereits ausgegeben: 3.2 h.
+
    ── Kennzahlen, die bei kleinen Stichproben NICHT gelesen werden ─
    Benson-Pässe und Passzahlen. Zwei Läufe mit je 40 Partien:
    Benson S 28 / W 45 gegen S 43 / W 0, Pässe 365/647 gegen 334/249.
