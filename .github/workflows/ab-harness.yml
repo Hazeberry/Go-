@@ -38,11 +38,11 @@ on:
         required: false
         default: '400'
       params_a:
-        description: 'PARAMS für A (Baseline), z. B. mctsValueScale=350,resignEnabled=0'
+        description: 'PARAMS für A, z. B. mctsValueScale=200,resignEnabled=0. Phasentausch: key@zug=wert'
         required: false
         default: ''
       params_b:
-        description: 'PARAMS für B (Kandidat), z. B. mctsValueScale=1000,resignEnabled=0'
+        description: 'PARAMS für B, z. B. mctsValueScale=200,mctsValueScale@200=1000 (ab Zug 200 umschalten)'
         required: false
         default: ''
 
@@ -81,9 +81,11 @@ jobs:
           [ "$IN_MAXMOVES" -ge 1 ] || { echo "::error::maxmoves muss ≥ 1 sein"; exit 2; }
 
           # params_a/params_b landen als Argument in der Kommandozeile. Nur
-          # schluessel=zahl,schluessel=zahl zulassen — alles andere (Anfuehrungs-
-          # zeichen, Semikolon, $(), Backticks) faellt hier durch.
-          PARAM_RE='^[A-Za-z_][A-Za-z0-9_]*=-?[0-9]+(\.[0-9]+)?(,[A-Za-z_][A-Za-z0-9_]*=-?[0-9]+(\.[0-9]+)?)*$'
+          # schluessel=zahl bzw. schluessel@zug=zahl zulassen — alles andere
+          # (Anfuehrungszeichen, Semikolon, $(), Backticks) faellt hier durch.
+          # Die @-Form setzt einen Parameter ab einem Zug (Phasentausch).
+          PARAM_ONE='[A-Za-z_][A-Za-z0-9_]*(@[0-9]+)?=-?[0-9]+(\.[0-9]+)?'
+          PARAM_RE="^${PARAM_ONE}(,${PARAM_ONE})*$"
           for v in A B; do
             eval "s=\$IN_$v"
             if [ -n "$s" ] && ! printf '%s' "$s" | grep -Eq "$PARAM_RE"; then
