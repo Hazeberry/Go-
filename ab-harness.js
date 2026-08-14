@@ -34,6 +34,14 @@
                        --komi ändert NUR die Abrechnung.
      --A k=v,k=v       PARAMS für Konfiguration A (Baseline)
      --B k=v,k=v       PARAMS für Konfiguration B (Kandidat)
+                       Phasenabhängig: k@N=v setzt k AB Zug N. Beispiel
+                       --B mctsValueScale=200,mctsValueScale@200=1000
+                       spielt bis Zug 199 mit 200, danach mit 1000.
+                       N zählt Züge der GESAMTEN Partie, die gemeinsame
+                       Eröffnung im Paar-Modus eingeschlossen. Beim Wechsel
+                       wird der gespeicherte Suchbaum verworfen, sonst
+                       trüge ein wiederverwendeter Knoten N/W aus der
+                       alten Skala in die neue hinein.
      --seed <n>        Zufalls-Seed (reproduzierbar)
      --json <pfad>     Rohdaten als JSON (alle Instrumente unten)
      --help            Diese Hilfe
@@ -260,19 +268,33 @@ const fs = require('fs');
 function parseArgs(argv) {
   const a = {
     html: './index.html', games: 4, paired: 0, opening: 20, obudget: 100,
-    budget: 250, maxMoves: 400, komi: 7.5, A: {}, B: {}, seed: null, json: null
+    budget: 250, maxMoves: 400, komi: 7.5,
+    A: {spec: '', plain: {}, steps: {}}, B: {spec: '', plain: {}, steps: {}},
+    seed: null, json: null
   };
+  /* Konfiguration = feste Werte plus optionale Phasenstufen (k@N=v).
+     Ergebnisform: {spec, plain:{k:v}, steps:{k:[[abZug,wert],...]}} */
   const kv = s => {
-    const o = {};
+    const cfg = {spec: s, plain: {}, steps: {}};
     for (const part of s.split(',')) {
-      const [k, v] = part.split('=').map(t => t.trim());
-      if (!k) continue;
+      const [lhs, v] = part.split('=').map(t => t.trim());
+      if (!lhs) continue;
       const n = Number(v);
       if (!Number.isFinite(n)) { console.error(`Ungültiger Wert: ${part}`); process.exit(2); }
-      o[k] = n;
+      const at = lhs.indexOf('@');
+      if (at < 0) { cfg.plain[lhs] = n; continue; }
+      const key = lhs.slice(0, at).trim();
+      const from = parseInt(lhs.slice(at + 1), 10);
+      if (!key || !Number.isInteger(from) || from < 0) {
+        console.error(`Ungültige Phasenangabe: ${part} (erwartet k@N=v mit N >= 0)`);
+        process.exit(2);
+      }
+      (cfg.steps[key] = cfg.steps[key] || []).push([from, n]);
     }
-    return o;
+    for (const k of Object.keys(cfg.steps)) cfg.steps[k].sort((x, y) => x[0] - y[0]);
+    return cfg;
   };
+  const emptyCfg = () => ({spec: '', plain: {}, steps: {}});
   for (let i = 2; i < argv.length; i++) {
     const k = argv[i], v = argv[i + 1];
     switch (k) {
@@ -383,6 +405,15 @@ const driver = `
   const qAt = (arr, f) => arr.length
     ? arr[Math.min(arr.length - 1, Math.floor(arr.length * f))] : null;
 
+  /* Wirksame Parameter einer Konfiguration bei Zug mc. Spätere Stufen
+     überschreiben frühere; ohne Stufen ist das einfach cfg.plain. */
+  function cfgAt(cfg, mc) {
+    const out = {...cfg.plain};
+    for (const k of Object.keys(cfg.steps))
+      for (const [from, val] of cfg.steps[k]) if (mc >= from) out[k] = val;
+    return out;
+  }
+
   function playGame(cfgBlack, cfgWhite, startState) {
     const board = startState ? cloneBoard(startState.board) : createBoard();
     const caps = startState ? {1: startState.caps[1], 2: startState.caps[2]} : {1: 0, 2: 0};
@@ -401,8 +432,8 @@ const driver = `
            konnte praktisch nicht regulär auslösen
        Jetzt: vor jedem Zug den Zustand der ziehenden Farbe einspielen,
        danach zurückschreiben — beide Farben verhalten sich wie im Spiel. */
-    const modState = {1: {root: null, hope: 0, dead: 0},
-                      2: {root: null, hope: 0, dead: 0}};
+    const modState = {1: {root: null, hope: 0, dead: 0, sig: null, phaseSwitches: 0},
+                      2: {root: null, hope: 0, dead: 0, sig: null, phaseSwitches: 0}};
     const st = {
       1: {moves: 0, sims: 0, timeMs: 0, q: []},
       2: {moves: 0, sims: 0, timeMs: 0, q: []}
@@ -415,11 +446,19 @@ const driver = `
 
     while (mc < AB.maxMoves && passes < 2 && !resignedBy) {
       const color = (mc % 2 === 0) ? 1 : 2;
-      const cfg = color === 1 ? cfgBlack : cfgWhite;
+      const cfg = cfgAt(color === 1 ? cfgBlack : cfgWhite, mc);
       Object.assign(PARAMS, PARAMS_DEFAULT,
         {aiTimeBudget: AB.budget, adaptiveBudgetEnabled: 0}, cfg);
 
       const ms = modState[color];
+      /* Phasenwechsel: gespeicherten Baum verwerfen. Ein wiederverwendeter
+         Knoten trägt N/W aus der alten Parametrisierung und würde sie mit
+         neuen Bewertungen weitermitteln — vermischte Skalen in einem Knoten,
+         und zwar nicht nur im Übergangszug, sondern so lange der Teilbaum
+         weiterlebt. */
+      const sig = JSON.stringify(cfg);
+      if (ms.sig !== null && ms.sig !== sig) { ms.root = null; ms.phaseSwitches++; }
+      ms.sig = sig;
       _mctsSavedRoot = ms.root; _hopelessStreak = ms.hope; _allDeadStreak = ms.dead;
 
       const t0 = Date.now();
@@ -466,6 +505,7 @@ const driver = `
     }
     return {winner, winner0, resignedBy, resignInfo, moves: mc,
             score, score0, st, anomalies, passSt, area,
+            phaseSwitches: modState[1].phaseSwitches + modState[2].phaseSwitches,
             q50: {1: qAt(st[1].q, .5), 2: qAt(st[2].q, .5)},
             q75: {1: qAt(st[1].q, .75), 2: qAt(st[2].q, .75)}};
   }
@@ -494,10 +534,10 @@ const driver = `
   }
 
   const label = (name, cfg) => {
-    const keys = Object.keys(cfg);
-    return name + ' (' + (keys.length
-      ? keys.map(k => k + '=' + cfg[k]).join(', ')
-      : 'Standard-Parameter') + ')';
+    const parts = Object.keys(cfg.plain).map(k => k + '=' + cfg.plain[k]);
+    for (const k of Object.keys(cfg.steps))
+      for (const [from, val] of cfg.steps[k]) parts.push(k + ' ab Zug ' + from + ' = ' + val);
+    return name + ' (' + (parts.length ? parts.join(', ') : 'Standard-Parameter') + ')';
   };
   const mean = a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : null;
   const fmt = (v, d) => v === null || v === undefined ? '—' : (+v).toFixed(d === undefined ? 1 : d);
@@ -553,6 +593,7 @@ const driver = `
       agg[key].moves += s.moves; agg[key].sims += s.sims; agg[key].timeMs += s.timeMs;
     }
     agg.anomalies += r.anomalies;
+    agg.phaseSwitches += r.phaseSwitches || 0;
     return {aWon, aWon0};
   }
 
@@ -565,6 +606,7 @@ const driver = `
       passFirst: {1: [], 2: []}, passTotal: {1: 0, 2: 0}, passBenson: {1: 0, 2: 0},
       q50: {1: [], 2: []}, q75: {1: [], 2: []},
       area: {M150: [], M200: [], M250: [], end: []},
+      phaseSwitches: 0,
       /* Dieselben Phasen-Kennzahlen, aber nach KONFIGURATION gruppiert statt
          nach Farbe. Ohne das beantwortet der Harness die Frage nicht, für die
          er gebaut ist: WO in der Partie ein Parameter wirkt. Gebiet ist
@@ -603,6 +645,9 @@ const driver = `
     console.log('PASS: erster Ø Zug S ' + fmt(mean(agg.passFirst[1]), 0) + ' / W ' + fmt(mean(agg.passFirst[2]), 0)
       + ' · gesamt S ' + agg.passTotal[1] + ' / W ' + agg.passTotal[2]
       + ' · Benson S ' + agg.passBenson[1] + ' / W ' + agg.passBenson[2]);
+    if (agg.phaseSwitches)
+      console.log('PHASENWECHSEL: ' + agg.phaseSwitches + ' mal ausgelöst (Suchbaum dabei verworfen)'
+        + ' — bei 0 hätte die Stufe nie gegriffen und das Ergebnis wäre bedeutungslos');
     if (agg.anomalies)
       console.log('⚠ ' + agg.anomalies + ' illegale KI-Züge abgefangen (als Pass gewertet) — bitte melden!');
     console.log(line);
@@ -690,7 +735,8 @@ const driver = `
   }
 
   if (AB.json) {
-    raw.konfig = {A: AB.A, B: AB.B, budgetMs: AB.budget, komi: AB.komi,
+    raw.konfig = {A: AB.A.spec || 'Standard', B: AB.B.spec || 'Standard',
+                  budgetMs: AB.budget, komi: AB.komi,
                   seed: AB.seed, modus: AB.paired > 0 ? 'paired' : 'standard'};
     require('fs').writeFileSync(AB.json, JSON.stringify(raw, null, 1));
     console.log('Rohdaten → ' + AB.json);
