@@ -209,6 +209,30 @@
    an der Parameterstelle in index.html) und der Phasentausch-Test,
    der Sättigung von allgemeiner Stärke trennen würde.
 
+   ── resignQ 0.95 gegen 0.997 (abgeschlossen) ───────────────────
+   Folgefrage aus der Skalenänderung: Die kleinere Skala erzeugt
+   größere |Q|, also greift die Aufgabeschwelle früher — in Brett-
+   punkten von −641 auf −366. 0.997 wäre der verhaltenserhaltende
+   Wert gewesen.
+   30 Paare = 60 Partien, beide Seiten mctsValueScale=200 und
+   resignEnabled=1 (erster Lauf überhaupt mit eingeschalteter
+   Aufgabe — bei der Skalenmessung musste sie aus sein, hier ist
+   sie der Gegenstand): 29:31, Komi-0 exakt 30:30, diskordante
+   Paare 8:9, p = 0.90. Sims/Zug 526 gegen 526.
+   Vorhersage war vorab festgelegt und einseitig: Aufgeben kann die
+   Siegrate nie verbessern, weil Weiterspielen schwach dominant ist.
+   Ein signifikanter Vorsprung der 0.95-Seite wäre also LOGISCH
+   UNMÖGLICH gewesen und hätte einen Messfehler angezeigt — dieser
+   eingebaute Falsifikationstest ist nicht ausgelöst worden.
+   Warum das kein leeres Nullergebnis ist: Die Schwelle hat
+   nachweislich unterschiedlich gefeuert. Die 0.95-Seite gab 26-mal
+   auf, die 0.997-Seite 18-mal, bei 44 Aufgaben in 60 Partien. Die
+   Diagnose trennt damit "Parameter tat nichts" von "rechtzeitiges
+   Aufgeben kostet nichts" — nur Letzteres ist belegt. Ohne die
+   Aufgabezählung wäre das Ergebnis mehrdeutig geblieben; das ist
+   die verallgemeinerbare Lehre für künftige Nullergebnisse.
+   → resignQ bleibt 0.95. NICHT ERNEUT TESTEN.
+
    ── Kennzahlen, die bei kleinen Stichproben NICHT gelesen werden ─
    Benson-Pässe und Passzahlen. Zwei Läufe mit je 40 Partien:
    Benson S 28 / W 45 gegen S 43 / W 0, Pässe 365/647 gegen 334/249.

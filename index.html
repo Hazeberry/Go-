@@ -607,11 +607,9 @@ globalThis.PARAMS = {
      Plateaus, nicht der höchste Einzelpunkt (Winner's Curse). Bestätigungslauf
      mit frischem Seed: 40:20 (66.7 %, p = 0.013), Komi-0 44:16 (73.3 %),
      zusammen mit dem Erstlauf 65:35 über 100 Partien (65 %, p = 0.0035).
-     ACHTUNG resignQ: kleinere Skala ⇒ größere |Q| ⇒ die Aufgabeschwelle
-     resignQ = 0.95 wird FRÜHER erreicht. In Brettpunkten: bei 350 entsprach
-     sie −641, bei 200 entspricht sie −366. Gemessen wurde die Skala mit
-     resignEnabled = 0, diese Wechselwirkung ist also UNGEPRÜFT. Verhaltens-
-     erhaltend wäre resignQ ≈ 0.997 — nicht gesetzt, weil ungemessen. */
+     Kopplung an resignQ — GEPRÜFT, siehe dort: Die kleinere Skala erzeugt
+     größere |Q| und lässt die Aufgabeschwelle früher greifen (in Brettpunkten
+     von −641 auf −366). Gemessen: kostet nichts. */
   mctsValueScale:   200,
   mctsMaxDepth:      60,
   /* RAVE/AMAF + Tree-Reuse — Statistik-Hebel ohne Training */
@@ -671,6 +669,18 @@ globalThis.PARAMS = {
      -resignQ, ist die Stellung entschieden — aufgeben statt Material
      spenden. minMoves verhindert Frühaufgabe auf verrauschtem Q. */
   resignEnabled:  1,
+  /* 0.95 GEMESSEN gegen 0.997, 30 gepaarte Paare = 60 Partien, beide Seiten
+     mctsValueScale=200 und resignEnabled=1: 29:31, Komi-0 exakt 30:30,
+     diskordante Paare 8:9 — p = 0.90, so nah an der Nulllinie wie bei 60
+     Partien möglich. 0.997 wäre der Wert, der die Aufgabeschwelle in
+     Brettpunkten so erhalten hätte, wie sie vor der Skalenänderung lag (−641
+     statt −366).
+     Dass die Schwelle überhaupt unterschiedlich feuerte, ist mitgemessen und
+     das Entscheidende am Nullergebnis: Die 0.95-Seite gab 26-mal auf, die
+     0.997-Seite 18-mal, bei 44 Aufgaben in 60 Partien. Der Parameter war also
+     hochaktiv — die 8 zusätzlich aufgegebenen Partien waren schlicht ohnehin
+     verloren. Der Befund lautet nicht "wirkungslos", sondern "rechtzeitiges
+     Aufgeben kostet nichts". NICHT ERNEUT TESTEN. */
   resignQ:        0.95,
   resignStreak:   5,
   resignMinMoves: 60,
