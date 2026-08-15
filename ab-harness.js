@@ -156,7 +156,13 @@
    Tree-Reuse-Crash, das Ko-Leck, das Steine-Füttern.
    Daraus das Kriterium: Bringt der Vorschlag Information ins
    System, die vorher nicht drin war? Wenn nein, ist Nullergebnis
-   die Erwartung. Für ein Policy-Netz heißt das konkret: Nur
+   die Erwartung. Schaerfung aus dem openContactResponse-Fall: Eine
+   fehlende STRUKTUR ist nicht automatisch eine fehlende INFORMATION.
+   evalOpening hatte keinen Kontaktterm und kannte die Zuege trotzdem
+   (Rang 20 von 359). Prueffrage: Wuesste die Bewertung den Zug ohne
+   den neuen Term ueberhaupt nicht — oder bewertet sie ihn nur
+   anders? Zur Belastbarkeit der Regel siehe den eigenen Abschnitt
+   weiter unten; sie taugt zum Priorisieren, nicht zum Ablehnen. Für ein Policy-Netz heißt das konkret: Nur
    Distillation aus externen Daten (z. B. KataGo) trägt neue
    Information — Selbstspiel-Imitation der eigenen Heuristik wäre
    wieder dasselbe Signal in neuer Verpackung.
@@ -372,6 +378,57 @@
    die Zuege aber trotzdem. Pruefkriterium fuer den naechsten
    Vorschlag dieser Art: Wuesste die Bewertung den Zug ohne den neuen
    Term ueberhaupt nicht — oder bewertet sie ihn nur anders?
+
+   ── Phasengrenze: nominelles Gewicht ist nicht Einfluss ────────
+   phaseWeights blendet die Experten per smoothstep, openingMoves=20
+   und phaseBlendWidth=8 ergeben nominell 50/50 bei mc=20 und einen
+   Uebergang von mc=12 bis 28. Gemessen wird etwas anderes.
+   evaluateMove mittelt die ROHWERTE der Experten. evalMidgame hat
+   eine deutlich groessere Entscheidungsspanne als evalOpening
+   (gemessen auf Extrembrettern 171 gegen 16), dominiert die Mischung
+   also lange bevor sein Gewicht 50 % erreicht.
+   Gemessen ueber die Top-20-Ueberlappung der geblendeten Rangfolge
+   mit den beiden reinen Experten, drei Brettdichten:
+     12 Steine → wirksamer Kipppunkt mc=20 (= nominell)
+     30 Steine → mc=16
+     50 Steine → mc=16
+   Am nominellen 50/50-Punkt traegt evalMidgame 81 % der
+   Entscheidungsvarianz. Bei nominell 84 % Eroeffnungsgewicht (mc=16)
+   aehnelt der Blend auf dichteren Brettern bereits dem Mittelspiel
+   mehr als der Eroeffnung.
+   Der Effekt waechst mit der Brettdichte: mehr Steine → mehr
+   taktische Terme feuern → groessere Spanne → frueherer Kipppunkt.
+   FOLGE: Der Eroeffnungs-Experte regiert effektiv ~15 Zuege, nicht
+   20. Jeder eroeffnungsspezifische Term hat ein kuerzeres Fenster
+   als der Parametername nahelegt — das galt auch fuer
+   openContactResponse.
+   KEIN FEHLERBEFUND: Eine schnellere Uebergabe an den taktischen
+   Experten kann richtig sein, sobald Steine in Kontakt kommen. Die
+   Messung sagt "der Parameter bedeutet nicht, was er sagt", nicht
+   "das Verhalten ist falsch".
+   Naheliegender Eingriff waere, jeden Experten vor dem Blend auf
+   eine gemeinsame Skala zu normieren. Nicht verfolgt: Das ist eine
+   Umgewichtung, und das Selektionsgesetz sagt dafuer Null voraus —
+   mit der Einschraenkung im naechsten Abschnitt.
+
+   ── Belastbarkeit des Selektionsgesetzes ───────────────────────
+   Das Gesetz oben ("nur was neue Information einbringt oder falsche
+   beseitigt, wirkt") ist eine FAUSTREGEL aus drei bis vier Faellen,
+   kein Befund. Wer es zum Ablehnen eines Experiments heranzieht,
+   sollte die Schwachstelle kennen:
+   Sein staerkster Beleg, mctsValueScale, ist selbst eine
+   Umgewichtung — es skaliert Rollout-Werte um und brachte trotzdem
+   +108 Elo. Eingeordnet wurde es als "beseitigt falsche Information"
+   (Ausreisserdaempfung), aber diese Einordnung entstand NACHDEM das
+   Ergebnis vorlag. Ein Gesetz, das seinen eigenen Gegenbeleg durch
+   nachtraegliche Umdeutung aufnimmt, traegt weniger weit als es
+   aussieht.
+   Bilanz ehrlich: korrekt vorhergesagt bei openContactResponse,
+   rolloutSample, FPU und der evaluateMove-Expansion; bei
+   mctsValueScale nur mit nachtraeglicher Umdeutung haltbar.
+   Praktische Konsequenz: Das Gesetz taugt zum Priorisieren, nicht
+   zum endgueltigen Ablehnen. Wenn ein Vorschlag billig zu messen ist,
+   misst man ihn, statt ihn wegzuargumentieren.
 
    ── Kennzahlen, die bei kleinen Stichproben NICHT gelesen werden ─
    Benson-Pässe und Passzahlen. Zwei Läufe mit je 40 Partien:
