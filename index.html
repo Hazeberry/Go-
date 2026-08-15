@@ -583,7 +583,19 @@ globalThis.PARAMS = {
      zwei Experten, bleibt der Rohpfad. Alles Nachgelagerte, das gegen absolute
      Werte vergleicht, bleibt außerhalb davon unberührt: die Pass-Schwellen
      passMinMc*, der Crisis-Blend, netScoreScale, localityBonus.
-     DEFAULT 0 = aus, Äquivalenz gegen HEAD geprüft. */
+     GEMESSEN, VERWORFEN — bleibt auf 0. Zwei parallele A/B-Läufe gegen 0,
+     je 20 Paare, frische Seeds: 13/40 (32.5 %, p = 0.039) und 21/40 (52.5 %,
+     p = 0.87), gepoolt 34/80 = 42.5 % (p = 0.22). Sims/Zug 552:551 bzw.
+     531:530. Kein Beleg für Nutzen; wenn überhaupt ein Hinweis auf leichten
+     Schaden, aber im Rauschen.
+     Nicht belegte, aber passende Lesart: Der Schalter schiebt den Kipppunkt
+     von Zug 16 auf 22, also über den nominellen Punkt hinaus. Ist die frühe
+     Übergabe an den taktischen Experten gut, wäre leichter Schaden erwartbar.
+     Einschränkung, vorab notiert: Der Schalter berührt nur mc 12–28, rund 16
+     von 400 Zügen. Ein Nullergebnis ist hier schwächer als bei
+     openContactResponse, wo der Verhaltensnachweis die ganze Eröffnung
+     abdeckte — vereinbar mit „wirkungslos" wie mit „zu selten angewandt".
+     DEFAULT 0 = aus, Äquivalenz gegen HEAD geprüft. NICHT ERNEUT TESTEN. */
   phaseNormalize: 0,
   /* Mittelspiel */
   midCapBonus:      800,
