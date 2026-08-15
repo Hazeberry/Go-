@@ -308,6 +308,48 @@
    eine Phase betrifft, gehört in den Phasen-Experten und nicht als
    globale Konstante hinter die Normierung.
 
+   ── openContactResponse: eingebaut, aus, ungemessen ────────────
+   Befund: evalOpening kennt nur, was der KANDIDATENZUG tut (schlagen,
+   Selbst-Atari) plus ownNbr fuer den Ausbau. Kein Term bemerkt, dass
+   ein BEREITS STEHENDER eigener Stein unter Druck geraten ist.
+   evalMidgame hat dafuer eine abgestufte Freiheitsanalyse je Nachbar,
+   evalOpening nichts. Sichtbar wird das als Tenuki bei Kontakt in der
+   Eroeffnung; die lokalen Antworten stehen auf Rang 20-22 von 359.
+   Sie sind der Bewertung bekannt und verlieren nur den Vergleich.
+   Eingebaut als openContactResponse, DEFAULT 0. Aequivalenz gegen
+   HEAD geprueft: 6753 Vergleiche, 0 Abweichungen — die Engine
+   verhaelt sich unveraendert, solange der Wert 0 ist.
+   Verhaltens-Sweep (Wurzelsortierung, Rauschen gepinnt, kein
+   Selbstspiel — die Frage ist Verhalten, nicht Staerke):
+     Wert   Raenge E3/C3/D2      Mittelspiel-Top-1
+        0   20 / 22 / 77         Referenz
+       20    7 /  8 / 13         unveraendert
+       40    4 /  5 /  9         unveraendert
+       60    4 /  5 /  6         unveraendert  (ab hier gesaettigt)
+      200    4 /  5 /  6         unveraendert
+   Drei Folgerungen:
+   1. Schwelle 20, nicht 40. Die Kalibrierung von localityBonus
+      uebertraegt sich NICHT eins zu eins: Der dortige Bonus faellt mit
+      der Distanz ab (Distanz 3 = 40 % des Werts), der Kontaktterm gibt
+      den vollen Wert an wenige Felder.
+   2. Ab 60 gesaettigt. Ein A/B bei 120 oder 200 waere verbrannte
+      Rechenzeit — das Verhalten aendert sich dort nicht mehr.
+      Sinnvolles Fenster: 20 bis 60.
+   3. Die Mittelspiel-Kontrolle ist ueber den GANZEN Bereich flach.
+      Der Term sitzt in evalOpening und ist bei mc=100 strukturell
+      ausgeblendet. Das ist der Unterschied zu localityBonus, das als
+      flache Konstante hinter der Phasennormierung sitzt und deshalb
+      nicht in beiden Phasen richtig sein kann.
+   Fehler auf dem Weg, festgehalten weil er ohne Kontrolle durchgegangen
+   waere: Die erste Fassung belohnte nur Zuege neben dem BERUEHRTEN
+   EIGENEN Stein. Der Top-1 kippte dadurch zwar, aber die Raenge von
+   E3/C3/D2 blieben exakt gleich — belohnt wurde eine andere Zugmenge
+   als die, deren niedriger Rang den Befund ausgeloest hatte. Erst die
+   Erweiterung auf beide Seiten des Kontakts (Hane neben dem Gegner-
+   stein UND Verstaerken neben dem eigenen) traf das Ziel.
+   STAERKE IST UNGEMESSEN. Der naechste Schritt ist ein A/B ueber
+   20-60 gegen 0, nicht das Umstellen des Defaults.
+
    ── Kennzahlen, die bei kleinen Stichproben NICHT gelesen werden ─
    Benson-Pässe und Passzahlen. Zwei Läufe mit je 40 Partien:
    Benson S 28 / W 45 gegen S 43 / W 0, Pässe 365/647 gegen 334/249.
