@@ -347,8 +347,31 @@
    als die, deren niedriger Rang den Befund ausgeloest hatte. Erst die
    Erweiterung auf beide Seiten des Kontakts (Hane neben dem Gegner-
    stein UND Verstaerken neben dem eigenen) traf das Ziel.
-   STAERKE IST UNGEMESSEN. Der naechste Schritt ist ein A/B ueber
-   20-60 gegen 0, nicht das Umstellen des Defaults.
+   GEMESSEN UND VERWORFEN. Zwei A/B-Laeufe gegen 0, je 20 Paare:
+     Wert 30 → 18/40 = 45.0 %, p = 0.64, Sims 702:702
+     Wert 60 → 21/40 = 52.5 %, p = 0.88, Sims 538:539
+     gepoolt   39/80 = 48.8 %, p = 0.91
+   Schwelle war VOR den Laeufen auf ~70 % festgelegt (Triage-Regel).
+   Default bleibt 0.
+   Gehaltvoll, nicht leer: Der Verhaltens-Sweep hatte vorher bewiesen,
+   dass der Term wirkt (Raenge 20→4, Mittelspiel flach). Die Engine
+   spielt also anders und gewinnt dadurch nicht — dieselbe Unter-
+   scheidung wie beim resignQ-Test.
+   Die Phasenzahlen stuetzen das von der anderen Seite: Angekuendigt
+   war, auf einen FRUEHEN Unterschied zu achten, weil der Term nur in
+   der Eroeffnung wirkt. Lauf 16 zeigt +1.8/+0.5/+0.9 bei Zug
+   150/200/250, Lauf 17 +2.2/+3.0/+4.1 — klein und ohne konsistente
+   Richtung.
+   SELBSTKRITIK, weil sie die Regel schaerft: Das Selektionsgesetz
+   sagte diesen Ausgang voraus, und ich habe es beim Aufsetzen
+   uebersehen. Der Befund war woertlich "die lokalen Antworten sind
+   der Bewertung BEKANNT und verlieren nur den Vergleich" — das ist
+   die Definition einer Umgewichtung desselben Signals, nicht neuer
+   Information. Eine fehlende Struktur ist nicht automatisch eine
+   fehlende INFORMATION: evalOpening hatte keinen Kontaktterm, kannte
+   die Zuege aber trotzdem. Pruefkriterium fuer den naechsten
+   Vorschlag dieser Art: Wuesste die Bewertung den Zug ohne den neuen
+   Term ueberhaupt nicht — oder bewertet sie ihn nur anders?
 
    ── Kennzahlen, die bei kleinen Stichproben NICHT gelesen werden ─
    Benson-Pässe und Passzahlen. Zwei Läufe mit je 40 Partien:

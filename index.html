@@ -547,8 +547,24 @@ globalThis.PARAMS = {
      vier bis sieben Felder. Voraussetzung ist echter Kontakt, nicht bloße
      Nähe: Der letzte Gegnerzug muss an einen eigenen Stein grenzen. Dieselbe Zahl wirkt hier also gezielt und
      nicht flächendeckend.
-     DEFAULT 0 = aus. Die Engine verhält sich damit unverändert (Äquivalenz
-     gegen HEAD geprüft). Erst messen, dann umstellen. */
+     GEMESSEN, VERWORFEN — bleibt auf 0. Zwei A/B-Läufe gegen 0, je 20 Paare
+     = 40 Partien, frische Seeds: Wert 30 → 18/40 (45.0 %, p = 0.64),
+     Wert 60 → 21/40 (52.5 %, p = 0.88), gepoolt 39/80 = 48.8 % (p = 0.91).
+     Sims/Zug 702:702 bzw. 538:539 — kein Geschwindigkeitsartefakt.
+     Der Term WIRKT nachweislich: Die lokalen Antworten steigen von Rang
+     20/22/77 auf 4/5/6, die Mittelspiel-Kontrolle bleibt flach. Es ist also
+     kein leeres Nullergebnis („Parameter tat nichts"), sondern ein
+     gehaltvolles („die Engine spielt anders und gewinnt dadurch nicht").
+     Im Nachhinein war das die Erwartung, nicht die Überraschung: Nach dem
+     Selektionsgesetz im Harness-Kopf wirkt nur, was NEUE Information
+     einbringt oder FALSCHE beseitigt. E3/C3 waren der Bewertung längst
+     bekannt und standen auf Rang 20 — sie höherzuschieben ist eine
+     Umgewichtung desselben Signals, und die ergab hier wie in allen
+     früheren Fällen null. Die Suche kompensiert schlechte Vorsortierung
+     ohnehin; dasselbe Muster zeigt quickEval, das Sternpunkte auf Rang 172
+     hat, während MCTS sie trotzdem spielt.
+     NICHT ERNEUT TESTEN. Der Parameter bleibt erhalten, damit die Messung
+     an der Stelle steht, an der jemand sonst dieselbe Idee neu hätte. */
   openContactResponse: 0,
   /* Mittelspiel */
   midCapBonus:      800,
