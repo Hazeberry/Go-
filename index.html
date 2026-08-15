@@ -528,6 +528,28 @@ globalThis.PARAMS = {
   openCornerBonus:   15,
   openCapBonus:     400,
   openNeighborBonus: 10,
+  /* Kontaktantwort in der Eröffnung. GEMESSEN als Lücke, WIRKUNG UNBELEGT.
+     evalOpening kennt nur, was der Kandidatenzug selbst tut (schlagen,
+     Selbst-Atari) und ownNbr für den Ausbau — es gibt keinen Term dafür, dass
+     ein BEREITS STEHENDER eigener Stein gerade unter Druck geraten ist.
+     evalMidgame hat dafür eine abgestufte Freiheitsanalyse je Nachbar
+     (midRescueAtari/midRescue2Lib/midOppAtari/...), evalOpening nichts.
+     Diagnose: Legt Weiß in der Eröffnung an einen einzelnen schwarzen Stein
+     an, spielt die Engine Tenuki; die lokalen Antworten stehen auf Rang 11–21
+     von ~359. Sie sind der Bewertung also bekannt und verlieren nur den
+     Vergleich gegen einen großen freien Punkt.
+     Kalibrierung: Die Entscheidungsspanne (p95−p50) von evalOpening auf einem
+     Eröffnungsbrett beträgt 16 Punkte; ein Term kippt den Top-1-Zug ab etwa
+     40. Der sinnvolle Suchbereich liegt daher bei 40–200. Anders als
+     localityBonus, der bis zu 81 Felder trifft, feuert dieser Term nur für
+     Züge am Kontaktpunkt selbst: neben dem gegnerischen Stein (Hane) oder
+     neben dem berührten eigenen Stein (Verstärken) — je nach Stellung etwa
+     vier bis sieben Felder. Voraussetzung ist echter Kontakt, nicht bloße
+     Nähe: Der letzte Gegnerzug muss an einen eigenen Stein grenzen. Dieselbe Zahl wirkt hier also gezielt und
+     nicht flächendeckend.
+     DEFAULT 0 = aus. Die Engine verhält sich damit unverändert (Äquivalenz
+     gegen HEAD geprüft). Erst messen, dann umstellen. */
+  openContactResponse: 0,
   /* Mittelspiel */
   midCapBonus:      800,
   midLibBonus:       30,
@@ -832,6 +854,27 @@ function evalOpening(board, i, color, mc) {
   let ownNbr = 0;
   for (const n of NEIGHBORS[i]) if (board[n] === color) ownNbr++;
   s += ownNbr * PARAMS.openNeighborBonus;
+  /* Kontaktantwort — siehe openContactResponse bei den PARAMS. Feuert nur,
+     wenn der Kandidat an einen eigenen Stein grenzt, den der letzte Gegnerzug
+     berührt hat. Einmal pro Zug, nicht je Nachbar. */
+  if (PARAMS.openContactResponse > 0 && _lastMoveIdx >= 0 && board[_lastMoveIdx] === opp) {
+    /* Nur wenn der letzte Gegnerzug ueberhaupt einen eigenen Stein beruehrt —
+       sonst ist es kein Kontakt, sondern nur Naehe. */
+    let kontakt = false;
+    for (const n of NEIGHBORS[_lastMoveIdx]) if (board[n] === color) { kontakt = true; break; }
+    if (kontakt) {
+      /* Beide Seiten des Kontakts belohnen: Zuege neben dem gegnerischen
+         Stein (Hane/Gegenkontakt) UND neben dem beruehrten eigenen Stein
+         (Verstaerken). Die erste Fassung kannte nur die zweite Menge und hob
+         damit genau die Zuege NICHT, deren niedriger Rang den Befund ausloeste. */
+      let trifft = NEIGHBORS[i].indexOf(_lastMoveIdx) >= 0;
+      if (!trifft) for (const n of NEIGHBORS[i]) {
+        if (board[n] !== color) continue;
+        if (NEIGHBORS[n].indexOf(_lastMoveIdx) >= 0) { trifft = true; break; }
+      }
+      if (trifft) s += PARAMS.openContactResponse;
+    }
+  }
   return s + Math.random() * 3;
 }
 
