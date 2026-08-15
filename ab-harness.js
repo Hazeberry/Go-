@@ -270,6 +270,44 @@
    direkten Spielgewinn; nach der Triage-Regel kein guter Tausch.
    Kosten bereits ausgegeben: 3.2 h.
 
+   ── Harness-Bug: lastMove kam nie an (behoben) ─────────────────
+   getAIMove nimmt als 9. Parameter lastMove. Das Spiel übergibt
+   dort state.lastMove (index.html:2032, 2072, 2269), der Harness
+   übergab hart null. Folge: _lastMoveIdx blieb hier immer -1, und
+   der Lokalitätsterm in evaluateMove (index.html:1118) ist hinter
+   "_lastMoveIdx >= 0" verriegelt — er konnte im Harness GAR NICHT
+   feuern. Ein A/B über localityBonus musste deshalb strukturell
+   50 % liefern, unabhängig vom Wert. Wer so ein Ergebnis vorliegen
+   hat: Es ist ein Messartefakt, kein Nullbefund.
+   Reichweite: _lastMoveIdx wird NUR in diesem einen Term gelesen,
+   und der Term ist zusätzlich hinter "localityBonus > 0" verriegelt.
+   Der Default ist 0, alle Läufe bis einschließlich Nr. 15 liefen mit
+   dem Default — sie sind also nachweislich unberührt. Das ist ein
+   statisches Argument aus dem Kontrollfluss, kein Testergebnis;
+   ein Verhaltenstest könnte es wegen der Zeitsteuerung gar nicht
+   zeigen.
+   Semantik wie im Spiel nachgebaut: nur bei einem Steinzug setzen,
+   beim Pass stehen lassen (index.html:1750 setzt lastMove nur dort).
+   Im Paar-Modus trägt die Eröffnung ihren letzten Zug in den
+   Startzustand, sonst startete Zug 21 wieder ohne Kontext.
+
+   ── Gemessen: was localityBonus mit der Zugwahl macht ──────────
+   Direkt an der Wurzelsortierung, Rauschen gepinnt, kein Selbstspiel
+   nötig — die Frage ist Verhalten, nicht Stärke:
+     Eröffnung (mc=2): ab Bonus 40 kippt der Top-1-Zug, ab 80 liegen
+       10 von 10 Spitzenzügen in Gegnernähe.
+     Mittelspiel (mc=100): Top-1 kippt erst ab 200.
+   Faktor ~5 im Schwellwert, und der Grund steckt in den Skalen der
+   Experten: evalOpening hat auf einem Eröffnungsbrett eine
+   Entscheidungsspanne (p95-p50) von 16 Punkten, evalMidgame auf
+   einem Mittelspielbrett 171 — Faktor 11. localityBonus wird NACH
+   der Phasennormierung als flache Konstante addiert. Ein einziger
+   Wert kann daher nicht in beiden Phasen richtig sein; er ist in
+   der Eröffnung erdrückend, wenn er im Mittelspiel spürbar ist.
+   Folgerung für künftige Vorschläge dieser Art: Ein Term, der nur
+   eine Phase betrifft, gehört in den Phasen-Experten und nicht als
+   globale Konstante hinter die Normierung.
+
    ── Kennzahlen, die bei kleinen Stichproben NICHT gelesen werden ─
    Benson-Pässe und Passzahlen. Zwei Läufe mit je 40 Partien:
    Benson S 28 / W 45 gegen S 43 / W 0, Pässe 365/647 gegen 334/249.
@@ -449,6 +487,14 @@ const driver = `
     const hist = startState ? new Set(startState.hist) : new Set([computeZobrist(board)]);
     const ko = {point: startState ? startState.ko : null};
     let mc = startState ? startState.mc : 0;
+    /* FIX: lastMove wurde nie uebergeben — der Harness rief getAIMove mit
+       null auf, das Spiel dagegen mit state.lastMove. Folge: _lastMoveIdx
+       blieb im Harness immer -1, und der Lokalitaetsterm in evaluateMove
+       (index.html:1118, Bedingung _lastMoveIdx >= 0) konnte GAR NICHT
+       greifen. Ein A/B ueber localityBonus haette hier strukturell 50 %
+       liefern muessen, unabhaengig vom Wert. Semantik wie im Spiel: nur bei
+       einem Steinzug setzen, beim Pass stehen lassen (index.html:1750). */
+    let lastIdx = startState ? (startState.lastMove ?? null) : null;
     let passes = 0, resignedBy = null, resignInfo = null, anomalies = 0;
     /* FIX: Modul-Zustand PRO FARBE führen. _mctsSavedRoot, _hopelessStreak
        und _allDeadStreak sind Modul-Variablen der Engine. Im Browser lebt
@@ -492,7 +538,7 @@ const driver = `
 
       const t0 = Date.now();
       const res = getAIMove(board, color, Array.from(hist), {...caps},
-                            mc, 'hard', 1, ko.point, null);
+                            mc, 'hard', 1, ko.point, lastIdx);
       const dt = Date.now() - t0;
 
       ms.root = _mctsSavedRoot; ms.hope = _hopelessStreak; ms.dead = _allDeadStreak;
@@ -516,6 +562,7 @@ const driver = `
           anomalies++; passes++; ko.point = null; mc++; continue;
         }
         applyMove(board, color, res.x, res.y, ko, hist, caps);
+        lastIdx = idx(res.x, res.y);
         passes = 0; mc++;
       }
       if (SNAP.indexOf(mc) >= 0 && !area['M' + mc]) {
@@ -546,20 +593,21 @@ const driver = `
     const caps = {1: 0, 2: 0};
     const hist = new Set([computeZobrist(board)]);
     const ko = {point: null};
-    let mc = 0, passes = 0;
+    let mc = 0, passes = 0, lastIdx = null;
     while (mc < plies && passes < 2) {
       const color = (mc % 2 === 0) ? 1 : 2;
       Object.assign(PARAMS, PARAMS_DEFAULT,
         {aiTimeBudget: AB.openingBudget, adaptiveBudgetEnabled: 0});
       const res = getAIMove(board, color, Array.from(hist), {...caps},
-                            mc, 'hard', 1, ko.point, null);
+                            mc, 'hard', 1, ko.point, lastIdx);
       if (res.type !== 'stone') { passes++; ko.point = null; mc++; continue; }
       const i = idx(res.x, res.y);
       if (board[i] !== 0) { passes++; ko.point = null; mc++; continue; }
       applyMove(board, color, res.x, res.y, ko, hist, caps);
+      lastIdx = i;
       passes = 0; mc++;
     }
-    return {board, caps, hist: Array.from(hist), ko: ko.point, mc};
+    return {board, caps, hist: Array.from(hist), ko: ko.point, mc, lastMove: lastIdx};
   }
 
   const label = (name, cfg) => {
@@ -693,7 +741,8 @@ const driver = `
     for (let p = 0; p < AB.paired; p++) {
       const opening = makeOpening(AB.opening);
       const start = {board: opening.board, caps: opening.caps,
-                     hist: opening.hist, ko: opening.ko, mc: opening.mc};
+                     hist: opening.hist, ko: opening.ko, mc: opening.mc,
+                     lastMove: opening.lastMove};
       const aBlackFirst = p % 2 === 0;
       const t0 = Date.now();
       const g1 = playGame(aBlackFirst ? AB.A : AB.B, aBlackFirst ? AB.B : AB.A, start);
