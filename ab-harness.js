@@ -308,7 +308,7 @@
    eine Phase betrifft, gehört in den Phasen-Experten und nicht als
    globale Konstante hinter die Normierung.
 
-   ── openContactResponse: eingebaut, aus, ungemessen ────────────
+   ── openContactResponse: gemessen und verworfen ────────────────
    Befund: evalOpening kennt nur, was der KANDIDATENZUG tut (schlagen,
    Selbst-Atari) plus ownNbr fuer den Ausbau. Kein Term bemerkt, dass
    ein BEREITS STEHENDER eigener Stein unter Druck geraten ist.
