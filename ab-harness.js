@@ -3,9 +3,11 @@
    A/B-HARNESS v2 für die Go-KI (Hazeberry/Go-)
    ═══════════════════════════════════════════════════════════════
    Self-Play-Messharness. Die KI-Logik wird zur Laufzeit DIREKT
-   aus der index.html extrahiert (<script id="shared-go-logic">
-   und "worker-ai") — kein Code-Duplikat, getestet wird exakt der
-   Stand, der auf GitHub Pages läuft. Beide Scripte sind DOM-frei.
+   aus der index.html extrahiert (<script id="shared-go-logic">,
+   "worker-ai" und "policy-net") — kein Code-Duplikat, getestet wird
+   exakt der Stand, der auf GitHub Pages läuft. Die ersten beiden
+   Blöcke sind DOM-frei; policy-net fasst localStorage und
+   document.getElementById an und bekommt beide hier als Schale.
 
    Aufruf:
      node ab-harness.js [Optionen]
@@ -44,6 +46,18 @@
                        alten Skala in die neue hinein.
      --seed <n>        Zufalls-Seed (reproduzierbar)
      --json <pfad>     Rohdaten als JSON (alle Instrumente unten)
+     --net <pfad>      Gewichte für das PolicyNet. Inhalt ist exakt der
+                       String, den der Browser unter localStorage
+                       'go_pnet' ablegt (im Dashboard gespeichert oder
+                       per localStorage.getItem('go_pnet') exportiert).
+                       Ohne die Option startet das Netz mit zufälligen
+                       Gewichten und gamesPlayed = 0.
+     --netgames <n>    gamesPlayed überschreiben. Nötig, weil blendWeight
+                       unterhalb von 2 Spielen 0 zurückgibt: ohne diese
+                       Option ist das Netz zwar geladen, aber wirkungslos,
+                       und ein A/B über netMaxBlend läge strukturell bei
+                       50 %. Für Wirksamkeitsnachweise, nicht für
+                       Stärkemessungen mit ungelernten Gewichten.
      --help            Diese Hilfe
 
    INSTRUMENTIERUNG (pro Partie, im JSON und als Aggregate):
@@ -486,6 +500,50 @@
    zum endgueltigen Ablehnen. Wenn ein Vorschlag billig zu messen ist,
    misst man ihn, statt ihn wegzuargumentieren.
 
+   ── PolicyNet: war im Harness gar nicht vorhanden ──────────────
+   Dritter Werkzeugfehler derselben Klasse wie lastMove = null. Die
+   Klasse PolicyNet und `globalThis.policyNet = new PolicyNet()`
+   standen im Haupt-Skript, das der Harness nicht extrahiert. In
+   getAIMove lautet die Bedingung `globalThis.policyNet &&
+   policyNet.blendWeight > 0` — im Harness war der erste Operand
+   undefined, der Zweig also tot. Ein A/B über netMaxBlend hätte
+   strukturell 50 % geliefert, ohne dass irgendetwas defekt aussieht.
+   Behoben: der Block hat jetzt `id="policy-net"` und wird als
+   dritter Block extrahiert; localStorage und document bekommt er
+   vom Harness als Schale, damit der Browser-Code unverändert bleibt.
+
+   ZWEITES Tor, das genauso still ist: blendWeight liefert unterhalb
+   von 2 gespielten Spielen 0. Ein frischer Harness-Prozess hat
+   gamesPlayed = 0 — das Netz wäre also auch nach der Extraktion
+   wirkungslos geblieben. Dafür gibt es --netgames; --net lädt
+   Gewichte im Browser-Format. Der Aggregatblock zeigt jetzt
+   POLICYNET mit der Zahl der forward()-Aufrufe, analog zu
+   PHASENWECHSEL: steht dort 0, misst der Lauf nichts.
+
+   Der Netz-Block zieht bei der Gewichtsinitialisierung rund 554 000
+   Zufallszahlen. Liefen die aus dem Hauptstrom, verschöbe allein
+   die ANWESENHEIT des Blocks jede Eröffnung. Er bekommt deshalb
+   einen eigenen seedabhängigen Strom (verifiziert: der Hauptstrom
+   liefert danach dieselben Werte wie ohne den Block).
+
+   WIRKSAMKEITSNACHWEIS, deterministisch über die Wurzelordnung,
+   10 Stellungen von Zug 20 bis 280, blendWeight 0.30, ungelernte
+   Gewichte: 95 % der Rangpositionen ändern sich, der Top-1-Zug in
+   2 von 10 Stellungen. Der Zweig ist also erreichbar UND wirksam.
+
+   DABEI EIN STRUKTURBEFUND, der vor jeder Stärkemessung steht: der
+   Netzbeitrag ist bw · p · netScoreScale ≈ 2 … 8 Punkte, und diese
+   Größe ist phasenunabhängig — die Entscheidungsspanne von
+   evaluateMove ist es nicht (Eröffnung ≈ 15.8, Mittelspiel ≈ 160,
+   siehe Phasengrenzen-Abschnitt oben). Folge: in der Eröffnung
+   dominiert der Prior die Heuristik (der alte Top-1 fiel auf Rang
+   221), im Mittelspiel ist er fast bedeutungslos. Ein A/B über
+   netMaxBlend mit ZUFÄLLIGEN Gewichten misst daher überwiegend,
+   was es kostet, die Eröffnung zu verrauschen — nicht, was das Netz
+   taugt. Ungelernte Priors liegen bei 1.36e-3 … 5.15e-3 gegen
+   2.77e-3 bei Gleichverteilung, sind also fast flach. Eine
+   Stärkemessung braucht trainierte Gewichte über --net.
+
    ── Kennzahlen, die bei kleinen Stichproben NICHT gelesen werden ─
    Benson-Pässe und Passzahlen. Zwei Läufe mit je 40 Partien:
    Benson S 28 / W 45 gegen S 43 / W 0, Pässe 365/647 gegen 334/249.
@@ -515,7 +573,7 @@ function parseArgs(argv) {
     html: './index.html', games: 4, paired: 0, opening: 20, obudget: 100,
     budget: 250, maxMoves: 400, komi: 7.5,
     A: {spec: '', plain: {}, steps: {}}, B: {spec: '', plain: {}, steps: {}},
-    seed: null, json: null
+    seed: null, json: null, net: null, netGames: 0
   };
   /* Konfiguration = feste Werte plus optionale Phasenstufen (k@N=v).
      Ergebnisform: {spec, plain:{k:v}, steps:{k:[[abZug,wert],...]}} */
@@ -555,6 +613,8 @@ function parseArgs(argv) {
       case '--B': a.B = kv(v); i++; break;
       case '--seed': a.seed = parseInt(v, 10); i++; break;
       case '--json': a.json = v; i++; break;
+      case '--net': a.net = v; i++; break;
+      case '--netgames': a.netGames = parseInt(v, 10); i++; break;
       case '--help': console.log(fs.readFileSync(__filename, 'utf8')
         .split('*/')[0].replace(/^\/\*+[^\n]*\n/, '')); process.exit(0);
       default: console.error(`Unbekannte Option: ${k} (--help)`); process.exit(2);
@@ -566,14 +626,47 @@ function parseArgs(argv) {
 const args = parseArgs(process.argv);
 
 /* ── Seedbarer Zufall (mulberry32) ───────────────────────────── */
-if (args.seed !== null) {
-  let s = args.seed >>> 0;
-  Math.random = function () {
+function mulberry32(seed) {
+  let s = seed >>> 0;
+  return function () {
     s |= 0; s = (s + 0x6D2B79F5) | 0;
     let t = Math.imul(s ^ (s >>> 15), 1 | s);
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
+}
+const zufallHaupt = args.seed !== null ? mulberry32(args.seed) : Math.random;
+const zufallNetz  = args.seed !== null ? mulberry32((args.seed ^ 0x9E3779B9) >>> 0) : Math.random;
+if (args.seed !== null) Math.random = zufallHaupt;
+
+/* Die Gewichtsinitialisierung des PolicyNet zieht rund 554 000 Zufallszahlen
+   (3971×128 + 361×128). Liefen die aus dem Hauptstrom, verschöbe allein die
+   ANWESENHEIT des Blocks jede Eröffnung und jeden Rollout — ein Lauf von
+   vorher wäre mit einem von nachher nicht mehr vergleichbar, obwohl sich an
+   der Suche nichts geändert hat. Der Block bekommt deshalb einen eigenen,
+   ebenfalls seedabhängigen Strom; danach steht der Hauptstrom exakt dort,
+   wo er ohne PolicyNet stünde. */
+globalThis.__netzZufallAn  = () => { if (args.seed !== null) Math.random = zufallNetz;  };
+globalThis.__netzZufallAus = () => { if (args.seed !== null) Math.random = zufallHaupt; };
+
+/* Browser-Schalen für den policy-net-Block. Der Block ist unverändert der
+   Code, der auch im Browser läuft; statt ihn mit typeof-Abfragen zu spicken,
+   bekommt er hier die zwei Objekte, die er überhaupt anfasst:
+     localStorage      — Gewichte laden/speichern (load/save/reset)
+     document          — dashUpdate() holt sich Dashboard-Felder; das erste
+                         liefert null, die Methode kehrt sofort zurück.
+   btoa/atob sind in Node ≥ 16 global vorhanden. */
+if (typeof globalThis.localStorage === 'undefined') {
+  const speicher = new Map();
+  if (args.net !== null) speicher.set('go_pnet', fs.readFileSync(args.net, 'utf8').trim());
+  globalThis.localStorage = {
+    getItem:    k => (speicher.has(k) ? speicher.get(k) : null),
+    setItem:    (k, v) => { speicher.set(k, String(v)); },
+    removeItem: k => { speicher.delete(k); }
+  };
+}
+if (typeof globalThis.document === 'undefined') {
+  globalThis.document = { getElementById: () => null };
 }
 
 /* ── KI-Scripts aus der index.html extrahieren ───────────────── */
@@ -587,6 +680,11 @@ function extractScript(html, id) {
 const html = fs.readFileSync(args.html, 'utf8');
 const sharedGoLogic = extractScript(html, 'shared-go-logic');
 const workerAi = extractScript(html, 'worker-ai');
+/* policy-net MUSS nach worker-ai laufen: der blendWeight-Getter liest PARAMS.
+   Name bewusst nicht "policyNet": der Driver wird im selben Scope evaluiert
+   und würde sonst diese Quelltext-Zeichenkette statt globalThis.policyNet
+   sehen. */
+const policyNetSrc = extractScript(html, 'policy-net');
 
 /* ── Driver: läuft im selben eval-Scope wie die KI ───────────── */
 const driver = `
@@ -905,7 +1003,27 @@ const driver = `
         + ' — bei 0 hätte die Stufe nie gegriffen und das Ergebnis wäre bedeutungslos');
     if (agg.anomalies)
       console.log('⚠ ' + agg.anomalies + ' illegale KI-Züge abgefangen (als Pass gewertet) — bitte melden!');
+    /* Erreichbarkeitsnachweis für das Netz, analog zu PHASENWECHSEL: steht
+       hier 0, hat der Blend-Zweig in getAIMove nie gefeuert und ein A/B über
+       netMaxBlend misst nichts. */
+    if (AB.netGames > 0 || netAufrufe)
+      console.log('POLICYNET: ' + netAufrufe + ' Vorwärtsläufe · gamesPlayed '
+        + (globalThis.policyNet ? policyNet.gamesPlayed : '—')
+        + ' · Gewichte ' + (AB.net ? AB.net : 'zufällig'));
     console.log(line);
+  }
+
+  /* PolicyNet für den Messlauf scharf schalten. blendWeight liefert unter
+     2 Spielen 0 — ohne --netgames ist das Netz zwar geladen, aber wirkungslos.
+     Der Zähler auf forward() belegt hinterher, dass es tatsächlich lief. */
+  let netAufrufe = 0;
+  if (globalThis.policyNet) {
+    if (AB.netGames > 0) policyNet.gamesPlayed = AB.netGames;
+    const _fwd = policyNet.forward.bind(policyNet);
+    policyNet.forward = inp => { netAufrufe++; return _fwd(inp); };
+  } else if (AB.netGames > 0) {
+    console.error('--netgames gesetzt, aber policyNet fehlt — <script id="policy-net"> nicht extrahiert?');
+    process.exit(2);
   }
 
   const raw = {partien: [], paare: []};
@@ -993,7 +1111,9 @@ const driver = `
   if (AB.json) {
     raw.konfig = {A: AB.A.spec || 'Standard', B: AB.B.spec || 'Standard',
                   budgetMs: AB.budget, komi: AB.komi,
-                  seed: AB.seed, modus: AB.paired > 0 ? 'paired' : 'standard'};
+                  seed: AB.seed, modus: AB.paired > 0 ? 'paired' : 'standard',
+                  netz: AB.net || null, netzSpiele: AB.netGames,
+                  netzVorwaertslaeufe: netAufrufe};
     require('fs').writeFileSync(AB.json, JSON.stringify(raw, null, 1));
     console.log('Rohdaten → ' + AB.json);
   }
@@ -1005,10 +1125,13 @@ const AB_CONFIG = {
   A: args.A, B: args.B,
   games: args.games, paired: args.paired, opening: args.opening,
   openingBudget: args.obudget, budget: args.budget, maxMoves: args.maxMoves,
-  komi: args.komi, seed: args.seed, json: args.json
+  komi: args.komi, seed: args.seed, json: args.json,
+  net: args.net, netGames: args.netGames
 };
 
 const t0 = Date.now();
 /* eslint-disable-next-line no-eval */
-eval(sharedGoLogic + '\n' + workerAi + '\n' + driver + '\n(' + JSON.stringify(AB_CONFIG) + ');');
+eval(sharedGoLogic + '\n' + workerAi
+   + '\n__netzZufallAn();\n'  + policyNetSrc + '\n__netzZufallAus();\n'
+   + driver + '\n(' + JSON.stringify(AB_CONFIG) + ');');
 console.log(`\nGesamtlaufzeit: ${((Date.now() - t0) / 60000).toFixed(1)} min`);

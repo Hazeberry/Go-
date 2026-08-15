@@ -47,9 +47,13 @@ nichts zu installieren.
 - **Die Zeitsteuerung ist Wall-Clock.** Auf langsamer Hardware sinkt die Zahl
   der Simulationen pro Zug und damit die Spielstärke. Ein fester Seed macht
   Läufe deshalb **nicht** reproduzierbar.
-- **Das Policy-Netz ist experimentell.** Ein kleines Dense-Netz (3971→128→361)
-  kann Wurzelzüge mitgewichten, trainiert per REINFORCE im Selbstspiel. Es ist
-  standardmäßig schwach gewichtet und bringt keinen belegten Gewinn.
+- **Das Policy-Netz ist experimentell und ungemessen.** Ein kleines Dense-Netz
+  (3971→128→361) kann Wurzelzüge mitgewichten, trainiert per REINFORCE im
+  Selbstspiel. Bis August 2026 war es im Messrahmen überhaupt nicht vorhanden,
+  ein A/B darüber hätte also strukturell 50 % geliefert; das ist jetzt behoben,
+  aber noch nicht in Spielstärke umgerechnet. Der Netzbeitrag ist zudem
+  phasenunabhängig groß, während die Entscheidungsspanne der Heuristik es nicht
+  ist — in der Eröffnung dominiert der Prior, im Mittelspiel verschwindet er.
 
 ## Architektur
 
@@ -60,11 +64,14 @@ im Browser *und* im Messrahmen identisch läuft:
 |---|---|
 | `<script id="shared-go-logic">` | Regeln, Zobrist-Hashing, Freiheiten, Benson — DOM-frei |
 | `<script id="worker-ai">` | MCTS, Bewertungsfunktionen, Rollouts — DOM-frei |
-| Haupt-Skript | UI, Rendering, Worker-Verwaltung, Dashboard, Policy-Netz |
+| `<script id="policy-net">` | Policy-Netz: Features, Forward, REINFORCE-Training |
+| Haupt-Skript | UI, Rendering, Worker-Verwaltung, Dashboard |
 
-Die beiden DOM-freien Blöcke werden vom Messrahmen zur Laufzeit aus der
-`index.html` extrahiert. Es gibt also **kein Code-Duplikat**: Gemessen wird
-exakt der Stand, der auch im Browser läuft.
+Alle drei ID-Blöcke werden vom Messrahmen zur Laufzeit aus der `index.html`
+extrahiert. Es gibt also **kein Code-Duplikat**: Gemessen wird exakt der Stand,
+der auch im Browser läuft. Die ersten beiden Blöcke sind DOM-frei; `policy-net`
+fasst `localStorage` und `document.getElementById` an und bekommt beide vom
+Messrahmen als Schale gestellt, statt im Code zu verzweigen.
 
 ### Bewertung
 
@@ -151,9 +158,13 @@ statt sie nachzuschieben.
 **Werkzeugfehler sehen aus wie Nullergebnisse.** Der Harness übergab
 `getAIMove` jahrelang `lastMove = null`, während das Spiel den echten Wert
 übergibt. Der davon abhängige Lokalitätsterm konnte im Harness also gar nicht
-feuern — ein A/B darüber hätte strukturell 50 % geliefert. Vor der Deutung
-eines Nullergebnisses gehört deshalb der Nachweis, dass der Parameter im
-Messaufbau überhaupt erreichbar war.
+feuern — ein A/B darüber hätte strukturell 50 % geliefert. Dasselbe beim
+Policy-Netz: die Klasse stand im Haupt-Skript, `globalThis.policyNet` war im
+Harness `undefined`, der Blend-Zweig damit tot. Und selbst nach der Extraktion
+blieb ein zweites stilles Tor — `blendWeight` liefert unter zwei gespielten
+Partien 0. Vor der Deutung eines Nullergebnisses gehört deshalb der Nachweis,
+dass der Parameter im Messaufbau überhaupt erreichbar *und* wirksam war; der
+Harness zählt dafür `PHASENWECHSEL` und `POLICYNET`-Vorwärtsläufe mit.
 
 Abgelehnte Befunde stehen als Kommentar an der jeweiligen Codestelle. Sonst
 wird derselbe Versuch in einem Jahr erneut gefahren und die Untersuchungskosten

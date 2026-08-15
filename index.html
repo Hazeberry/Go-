@@ -1646,7 +1646,13 @@ function getAIMove(board, aiColor, histHashes, captures, mc, diff, reqId, koPoin
     const _bw = policyNet.blendWeight;
     let _p = null, _h = null, _inp = null;
     if (typeof policyNet.forward === 'function') {
-      _inp = policyNet.boardToInput(board, aiColor, policyNet._lastMove || null, koPoint);
+      /* Letzten Zug aus dem EIGENEN Parameter ableiten, nicht aus dem
+         Seitenkanal policyNet._lastMove. Im Browser ist beides derselbe
+         Wert (state.lastMove wird oben gesetzt und hier übergeben), im
+         Harness setzt niemand _lastMove — Feature-Layer 8 wäre dort also
+         dauerhaft leer gewesen, während er im Spiel gefüllt ist. */
+      const _lm = _lastMoveIdx >= 0 ? {x: xOf(_lastMoveIdx), y: yOf(_lastMoveIdx)} : null;
+      _inp = policyNet.boardToInput(board, aiColor, _lm, koPoint);
       const _r = policyNet.forward(_inp);
       _p = _r.probs; _h = _r.hidden;
     } else {
@@ -2763,7 +2769,14 @@ document.getElementById('btn-bug-report').addEventListener('click', () => {
 });
 render();updateUI();updateAIStatus();updateUndoButton();
 </script>
-<script>
+<!-- Dritter extrahierbarer Block. Der Messrahmen (ab-harness.js) zieht sich
+     shared-go-logic, worker-ai und policy-net zur Laufzeit aus dieser Datei;
+     ohne id war das Netz im Harness schlicht nicht vorhanden, `globalThis
+     .policyNet` blieb undefined und die Blend-Bedingung in getAIMove konnte
+     nie feuern — ein A/B über netMaxBlend hätte strukturell 50 % geliefert.
+     Der Block ist nicht DOM-frei (localStorage, getElementById); der Harness
+     stellt beide Objekte als Schale bereit, statt hier zu verzweigen. -->
+<script id="policy-net">
 'use strict';
 
 class PolicyNet {
