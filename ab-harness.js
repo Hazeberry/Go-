@@ -411,6 +411,62 @@
    Umgewichtung, und das Selektionsgesetz sagt dafuer Null voraus —
    mit der Einschraenkung im naechsten Abschnitt.
 
+   ── phaseNormalize: gemessen und verworfen ─────────────────────
+   Antwort auf den Phasengrenzen-Befund oben. Mit 1 werden die
+   Experten vor dem Blend gegeneinander normiert und danach auf die
+   gewichtete Referenzskala zurueckgerechnet:
+     sPhase = Σ(w·u/S)/Σw × Σ(w·S)/Σw
+   Referenzspannen (p95−p50, Median ueber je 10 Bretter):
+     evalOpening 15.8 · evalMidgame 160.2 · evalEndgame 158.0
+   WICHTIGER NEBENBEFUND: Mittelspiel und Endspiel liegen auf
+   derselben Skala. Der Bruch existiert NUR an der Eroeffnungsgrenze;
+   an der Endspielgrenze kann der Schalter nichts bewirken. Das
+   halbiert die Reichweite des Eingriffs.
+   Konstruktion: Der Normierungspfad greift nur, wenn mindestens ZWEI
+   Experten mischen. Bei einem einzigen waere (v/S)*S mathematisch v,
+   aber nicht bitgenau — gemessen bis zu ein ULP Abweichung, und ein
+   ULP kippt bei Gleichstand die Rangfolge. Erst diese Bedingung macht
+   "ausserhalb der Uebergangszone unveraendert" konstruktiv statt
+   rundungsabhaengig. Belegt: 1120 Bewertungen bei mc 0/4/8/40/60/
+   120/250, 0 Abweichungen. Aequivalenz bei Default 0: 2686
+   Vergleiche, 0 Abweichungen (inkl. evaluateMove quer durch die Zone).
+   VERHALTEN — und hier stimmt die Erwartung NICHT:
+     Kipppunkt   aus      an     nominell
+     12 Steine   mc 20  → mc 26     20
+     30 Steine   mc 16  → mc 22     20
+     50 Steine   mc 16  → mc 22     20
+   Die Normierung trifft die nominelle Grenze nicht, sie schiesst
+   darueber hinaus. Vorher lag der Kipppunkt 4 Zuege zu frueh, jetzt
+   2-6 zu spaet. Grund: Gleiche Varianz ist nicht gleiche Wirkung auf
+   die Top-20. Die Eroeffnungs-Rangfolge wird von wenigen grossen
+   Termen getragen (Sternpunkte, Ecken) und ist dadurch zaeher als die
+   breiter gestreute Mittelspiel-Rangfolge. Der Schalter verschiebt
+   die wirksame Grenze nach hinten, er legt sie nicht auf die
+   nominelle — der Name verspricht mehr als er haelt.
+   GEMESSEN UND VERWORFEN. Zwei PARALLELE Laeufe gegen 0, je 20 Paare:
+     Seed 7301 → 13/40 = 32.5 %, p = 0.039, Sims 552:551
+     Seed 7302 → 21/40 = 52.5 %, p = 0.87,  Sims 531:530
+     gepoolt     34/80 = 42.5 %, p = 0.22
+   Default bleibt 0.
+   METHODISCH DER LEHRREICHSTE LAUF DER SERIE: Haette ich nur den
+   ersten gefahren, laege jetzt ein "signifikantes" Ergebnis bei
+   p = 0.039 vor, das die Replikation nicht traegt. Bei zwei Tests
+   rutscht mit ~10 % Wahrscheinlichkeit einer unter 0.05 — hier ist
+   es passiert. Die 20 Prozentpunkte Abstand liegen vollstaendig im
+   95-%-Zufallsband von 35-65 % bei n=40.
+   Daraus eine Empfehlung fuer kuenftige Erstlaeufe: ZWEI Seeds
+   PARALLEL statt eines laengeren Laufs. Gleiche Wanduhrzeit, aber
+   ein Fehlalarm faellt sofort auf statt erst im Bestaetigungslauf.
+   Nicht belegte, aber passende Lesart: Der Schalter schiebt den
+   Kipppunkt von 16 auf 22, ueber den nominellen Punkt hinaus. Ist
+   die fruehe Uebergabe an den taktischen Experten gut, waere
+   leichter Schaden erwartbar. 42.5 % bei p = 0.22 belegen das nicht.
+   Einschraenkung, VORAB notiert: Der Schalter beruehrt nur mc 12-28,
+   rund 16 von 400 Zuegen. Ein Nullergebnis ist hier schwaecher als
+   bei openContactResponse, wo der Verhaltensnachweis die ganze
+   Eroeffnung abdeckte — vereinbar mit "wirkungslos" wie mit
+   "wirksam, aber zu selten angewandt fuer 80 Partien".
+
    ── Belastbarkeit des Selektionsgesetzes ───────────────────────
    Das Gesetz oben ("nur was neue Information einbringt oder falsche
    beseitigt, wirkt") ist eine FAUSTREGEL aus drei bis vier Faellen,

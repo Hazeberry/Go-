@@ -566,6 +566,37 @@ globalThis.PARAMS = {
      NICHT ERNEUT TESTEN. Der Parameter bleibt erhalten, damit die Messung
      an der Stelle steht, an der jemand sonst dieselbe Idee neu hätte. */
   openContactResponse: 0,
+  /* Phasen-Normierung. GEMESSEN als Struktureffekt, WIRKUNG UNBELEGT.
+     evaluateMove mittelt die ROHWERTE der Experten. Deren Entscheidungs-
+     spannen (p95−p50, Median über 10 Bretter) sind aber sehr verschieden:
+       evalOpening 15.8 · evalMidgame 160.2 · evalEndgame 158.0
+     Mittelspiel und Endspiel liegen also gleichauf, die Eröffnung um Faktor
+     10 darunter. Folge an der Eröffnungsgrenze: Bei nominell 84 % Eröffnungs-
+     gewicht (Zug 16) ähnelt die geblendete Rangfolge auf dichteren Brettern
+     schon dem Mittelspiel mehr als der Eröffnung; am nominellen 50/50-Punkt
+     trägt das Mittelspiel 81 % der Entscheidungsvarianz. Der Eröffnungs-
+     Experte regiert effektiv ~15 Züge statt 20.
+     Mit 1 wird zwischen den Experten normiert und anschließend auf die
+     gewichtete Referenzskala zurückgerechnet. Bei reinem Gewicht kürzt sich
+     das exakt zum heutigen Rohwert — die Änderung wirkt AUSSCHLIESSLICH in
+     der Übergangszone (Zug 12–28), und zwar konstruktiv: Mischen weniger als
+     zwei Experten, bleibt der Rohpfad. Alles Nachgelagerte, das gegen absolute
+     Werte vergleicht, bleibt außerhalb davon unberührt: die Pass-Schwellen
+     passMinMc*, der Crisis-Blend, netScoreScale, localityBonus.
+     GEMESSEN, VERWORFEN — bleibt auf 0. Zwei parallele A/B-Läufe gegen 0,
+     je 20 Paare, frische Seeds: 13/40 (32.5 %, p = 0.039) und 21/40 (52.5 %,
+     p = 0.87), gepoolt 34/80 = 42.5 % (p = 0.22). Sims/Zug 552:551 bzw.
+     531:530. Kein Beleg für Nutzen; wenn überhaupt ein Hinweis auf leichten
+     Schaden, aber im Rauschen.
+     Nicht belegte, aber passende Lesart: Der Schalter schiebt den Kipppunkt
+     von Zug 16 auf 22, also über den nominellen Punkt hinaus. Ist die frühe
+     Übergabe an den taktischen Experten gut, wäre leichter Schaden erwartbar.
+     Einschränkung, vorab notiert: Der Schalter berührt nur mc 12–28, rund 16
+     von 400 Zügen. Ein Nullergebnis ist hier schwächer als bei
+     openContactResponse, wo der Verhaltensnachweis die ganze Eröffnung
+     abdeckte — vereinbar mit „wirkungslos" wie mit „zu selten angewandt".
+     DEFAULT 0 = aus, Äquivalenz gegen HEAD geprüft. NICHT ERNEUT TESTEN. */
+  phaseNormalize: 0,
   /* Mittelspiel */
   midCapBonus:      800,
   midLibBonus:       30,
@@ -1148,6 +1179,11 @@ function evalTsumego(board, i, color, mc) {
    Jetzt: smoothstep-Rampen über ±phaseBlendWidth Züge; in der
    Übergangszone laufen zwei Experten und werden gewichtet gemischt.
    phaseBlendWidth = 0 stellt exakt das alte Verhalten wieder her. */
+/* Referenz-Entscheidungsspannen der Experten (p95−p50), gemessen als Median
+   über je 10 zufällige Bretter passender Dichte. Nur für phaseNormalize; sie
+   sind Messwerte, keine Stellschrauben. */
+const PHASE_SPAN = {open: 15.8, mid: 160.2, end: 158.0};
+
 function smoothstep01(t) { t = t < 0 ? 0 : t > 1 ? 1 : t; return t * t * (3 - 2 * t); }
 
 function phaseWeights(mc, emptyFields) {
@@ -1167,11 +1203,24 @@ function phaseWeights(mc, emptyFields) {
 function evaluateMove(board, i, color, mc, emptyFields) {
   const {wOpen, wMid, wEnd} = phaseWeights(mc, emptyFields);
   const T = 0.02;   /* Experten unter 2% Gewicht nicht rechnen (Perf) */
-  let sPhase = 0, wSum = 0;
-  if (wOpen > T) { sPhase += wOpen * evalOpening(board, i, color, mc); wSum += wOpen; }
-  if (wMid  > T) { sPhase += wMid  * evalMidgame(board, i, color, mc); wSum += wMid; }
-  if (wEnd  > T) { sPhase += wEnd  * evalEndgame(board, i, color, mc); wSum += wEnd; }
-  if (wSum > 0) sPhase /= wSum;
+  let sPhase = 0, wSum = 0, nSum = 0, sSum = 0;
+  /* Nur normieren, wenn ueberhaupt zwei Experten mischen. Bei einem einzigen
+     aktiven Experten waere (v/S)*S mathematisch v, aber nicht bitgenau — der
+     Umweg kostet bis zu ein ULP, und ein ULP kippt bei Gleichstand die
+     Rangfolge. Diese Bedingung macht "ausserhalb der Uebergangszone
+     unveraendert" zu einer konstruktiven Eigenschaft statt zu einer, die von
+     Rundung abhaengt. */
+  const NZ = PARAMS.phaseNormalize > 0
+    && ((wOpen > T) + (wMid > T) + (wEnd > T)) > 1;
+  if (wOpen > T) { const v = evalOpening(board, i, color, mc); sPhase += wOpen * v;
+    if (NZ) { nSum += wOpen * v / PHASE_SPAN.open; sSum += wOpen * PHASE_SPAN.open; } wSum += wOpen; }
+  if (wMid  > T) { const v = evalMidgame(board, i, color, mc); sPhase += wMid * v;
+    if (NZ) { nSum += wMid  * v / PHASE_SPAN.mid;  sSum += wMid  * PHASE_SPAN.mid;  } wSum += wMid; }
+  if (wEnd  > T) { const v = evalEndgame(board, i, color, mc); sPhase += wEnd * v;
+    if (NZ) { nSum += wEnd  * v / PHASE_SPAN.end;  sSum += wEnd  * PHASE_SPAN.end;  } wSum += wEnd; }
+  /* Normiert mischen, dann auf die gewichtete Referenzskala zurueck. Bei
+     reinem Gewicht kuerzt sich das zum Rohwert des einzigen Experten. */
+  if (wSum > 0) sPhase = NZ ? (nSum / wSum) * (sSum / wSum) : sPhase / wSum;
   /* Lokalitätsbonus: Chebyshev-Distanz zum letzten Gegnerzug, linear
      abfallend. Vor dem Crisis-Blend, damit Taktik ihn überstimmen darf. */
   if (PARAMS.localityBonus > 0 && _lastMoveIdx >= 0) {
