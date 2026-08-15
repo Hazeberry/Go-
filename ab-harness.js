@@ -411,6 +411,42 @@
    Umgewichtung, und das Selektionsgesetz sagt dafuer Null voraus —
    mit der Einschraenkung im naechsten Abschnitt.
 
+   ── phaseNormalize: eingebaut, aus, Wirkung ungemessen ─────────
+   Antwort auf den Phasengrenzen-Befund oben. Mit 1 werden die
+   Experten vor dem Blend gegeneinander normiert und danach auf die
+   gewichtete Referenzskala zurueckgerechnet:
+     sPhase = Σ(w·u/S)/Σw × Σ(w·S)/Σw
+   Referenzspannen (p95−p50, Median ueber je 10 Bretter):
+     evalOpening 15.8 · evalMidgame 160.2 · evalEndgame 158.0
+   WICHTIGER NEBENBEFUND: Mittelspiel und Endspiel liegen auf
+   derselben Skala. Der Bruch existiert NUR an der Eroeffnungsgrenze;
+   an der Endspielgrenze kann der Schalter nichts bewirken. Das
+   halbiert die Reichweite des Eingriffs.
+   Konstruktion: Der Normierungspfad greift nur, wenn mindestens ZWEI
+   Experten mischen. Bei einem einzigen waere (v/S)*S mathematisch v,
+   aber nicht bitgenau — gemessen bis zu ein ULP Abweichung, und ein
+   ULP kippt bei Gleichstand die Rangfolge. Erst diese Bedingung macht
+   "ausserhalb der Uebergangszone unveraendert" konstruktiv statt
+   rundungsabhaengig. Belegt: 1120 Bewertungen bei mc 0/4/8/40/60/
+   120/250, 0 Abweichungen. Aequivalenz bei Default 0: 2686
+   Vergleiche, 0 Abweichungen (inkl. evaluateMove quer durch die Zone).
+   VERHALTEN — und hier stimmt die Erwartung NICHT:
+     Kipppunkt   aus      an     nominell
+     12 Steine   mc 20  → mc 26     20
+     30 Steine   mc 16  → mc 22     20
+     50 Steine   mc 16  → mc 22     20
+   Die Normierung trifft die nominelle Grenze nicht, sie schiesst
+   darueber hinaus. Vorher lag der Kipppunkt 4 Zuege zu frueh, jetzt
+   2-6 zu spaet. Grund: Gleiche Varianz ist nicht gleiche Wirkung auf
+   die Top-20. Die Eroeffnungs-Rangfolge wird von wenigen grossen
+   Termen getragen (Sternpunkte, Ecken) und ist dadurch zaeher als die
+   breiter gestreute Mittelspiel-Rangfolge. Der Schalter verschiebt
+   die wirksame Grenze nach hinten, er legt sie nicht auf die
+   nominelle — der Name verspricht mehr als er haelt.
+   STAERKE UNGEMESSEN. Erwartbare Effektgroesse von vornherein klein:
+   Der Schalter aendert die Zugwahl nur in der Zone mc 12-28, also in
+   rund 16 von 400 Zuegen einer Partie.
+
    ── Belastbarkeit des Selektionsgesetzes ───────────────────────
    Das Gesetz oben ("nur was neue Information einbringt oder falsche
    beseitigt, wirkt") ist eine FAUSTREGEL aus drei bis vier Faellen,
