@@ -36,6 +36,12 @@ nichts zu installieren.
 
 - **Der Suchmechanismus ist nur teilweise verstanden.** `mctsValueScale` ist
   belegt der wichtigste Parameter, *warum* er wirkt, ist offen (siehe unten).
+- **Die Phasengrenze liegt nicht dort, wo der Parameter sagt.** `openingMoves`
+  steht auf 20, aber der Eröffnungs-Experte regiert effektiv nur etwa 15 Züge:
+  Der Blend mittelt Rohwerte, und `evalMidgame` hat die rund zehnfach größere
+  Entscheidungsspanne. Am nominellen 50/50-Punkt trägt es bereits 81 % der
+  Varianz. Ob das schädlich ist, ist offen — ein Normierungsversuch hat nicht
+  geholfen.
 - **Lange Partien.** Ohne Aufgabelogik laufen Selbstspiel-Partien regelmäßig
   auf 400+ Züge, der erste Pass fällt im Mittel um Zug 390.
 - **Die Zeitsteuerung ist Wall-Clock.** Auf langsamer Hardware sinkt die Zahl
@@ -103,7 +109,14 @@ Simulationszahl pro Zug direkt an der Rechenleistung hängt.
 | Kurve 100/150/200/250/300/500/1000 | Plateau bei 150–250, Abfall zu beiden Seiten | Mitte des Plateaus gewählt, nicht der Höchstwert |
 | `resignQ` 0,95 gegen 0,997 | 29:31 über 60 Partien, p = 0,90 | 0,95 bleibt — rechtzeitiges Aufgeben kostet nichts |
 | Phasentausch früh/spät | +12,5 gegen +5,0 Prozentpunkte, Differenz 3 Partien | **nicht entschieden** — Mechanismus offen |
+| `openContactResponse` (neuer Term in `evalOpening`) | 48,8 % über 80 Partien, p = 0,91 | verworfen — Default 0 |
+| `phaseNormalize` (Experten vor dem Blend normieren) | 42,5 % über 80 Partien, p = 0,22 | verworfen — Default 0 |
 | `rolloutSample`, `evaluateMove`-Expansion, FPU-Vorzeichen | 60 %, 61 %, ±0,005 ΔQ | abgelehnt bzw. ohne Stärkeeffekt eingebaut |
+
+Zwei der Nullergebnisse sind **gehaltvoll, nicht leer**: Bei beiden ist per
+Verhaltensmessung belegt, dass der Parameter die Zugwahl ändert — bei
+`openContactResponse` steigen die lokalen Antworten von Rang 20 auf 4. Die
+Engine spielt also nachweislich anders und gewinnt dadurch nicht.
 
 Die vollständigen Zahlen samt Vorbehalten stehen im Kopfkommentar von
 [`ab-harness.js`](ab-harness.js).
@@ -127,6 +140,20 @@ Skalen-Plateau die Mitte gewählt und nicht der Spitzenwert.
 wurde mitgezählt, dass die Schwelle unterschiedlich oft feuerte (26 gegen 18
 Aufgaben). Ohne diese Zahl wäre „der Parameter tat nichts" nicht von
 „rechtzeitiges Aufgeben kostet nichts" zu unterscheiden gewesen.
+
+**Erstläufe mit zwei Seeds parallel, nicht als ein längerer Lauf.** Beim
+`phaseNormalize`-Test lieferte der erste Seed 32,5 % bei p = 0,039 — ein
+„signifikantes" Ergebnis, das der zweite Seed mit 52,5 % nicht trug. Bei zwei
+Tests rutscht rund jeder zehnte zufällig unter 0,05. Zwei parallele Läufe
+kosten dieselbe Wanduhrzeit wie einer und nehmen die Replikation vorweg,
+statt sie nachzuschieben.
+
+**Werkzeugfehler sehen aus wie Nullergebnisse.** Der Harness übergab
+`getAIMove` jahrelang `lastMove = null`, während das Spiel den echten Wert
+übergibt. Der davon abhängige Lokalitätsterm konnte im Harness also gar nicht
+feuern — ein A/B darüber hätte strukturell 50 % geliefert. Vor der Deutung
+eines Nullergebnisses gehört deshalb der Nachweis, dass der Parameter im
+Messaufbau überhaupt erreichbar war.
 
 Abgelehnte Befunde stehen als Kommentar an der jeweiligen Codestelle. Sonst
 wird derselbe Versuch in einem Jahr erneut gefahren und die Untersuchungskosten
