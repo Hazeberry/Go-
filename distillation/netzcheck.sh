@@ -1,32 +1,47 @@
 #!/bin/sh
-# Sagt genau, WELCHER Host in der Allowlist fehlt — statt nur "geht nicht".
-# Die Shards liegen nicht auf huggingface.co selbst: der resolve-Pfad
-# antwortet mit einer Weiterleitung auf ein CDN, und dieser zweite Host
-# braucht die Freigabe genauso. Wer nur huggingface.co freigibt, sieht die
-# Metadaten und scheitert erst beim Download.
+# Sagt genau, WELCHE Hosts in der Allowlist fehlen — statt nur "geht nicht",
+# und statt nur den ersten zu nennen.
+#
+# Warum alle auf einmal: die Shards liegen nicht auf huggingface.co selbst.
+# Der resolve-Pfad antwortet mit einer Weiterleitung auf ein CDN, und dieser
+# zweite Host braucht die Freigabe genauso. Eine laufende Session behaelt die
+# Policy, mit der sie gestartet ist — wer die Hosts einzeln nachtraegt,
+# bezahlt jeden mit einer weiteren Session. Deshalb wird hier nicht beim
+# ersten Fehlschlag abgebrochen, sondern die vollstaendige Liste ausgegeben.
 set -u
 REPO=TomGrc/katago-shuffle-20240527-20260607-zhizi
 PFAD=shuffleddata/katago_20240527_20260607_zhizi_20260610-150619/val/data0_0.npz
 URL="https://huggingface.co/datasets/$REPO/resolve/main/$PFAD"
 
-pruefe() {
-  code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$1" 2>/dev/null)
-  if [ "$code" = "000" ]; then
-    echo "  FEHLT   $2  (kein Verbindungsaufbau — Policy blockiert diesen Host)"
-    return 1
-  fi
-  echo "  ok      $2  (HTTP $code)"
-  return 0
-}
+# Metadaten-Host, Kurzform, und die Auslieferungswege, die der Hub heute
+# benutzt (klassisches CDN und Xet). Welcher davon zum Zug kommt, entscheidet
+# der Hub zur Laufzeit — freigegeben sein muessen sie deshalb alle.
+HOSTS="huggingface.co hf.co cdn-lfs.huggingface.co cdn-lfs-us-1.hf.co transfer.xethub.hf.co cas-bridge.xethub.hf.co"
 
-echo "1) API-Host"
-pruefe "https://huggingface.co/api/datasets/$REPO" "huggingface.co" || {
+FEHLEN=""
+echo "1) Erreichbarkeit der bekannten Hosts"
+for h in $HOSTS; do
+  code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "https://$h/" 2>/dev/null)
+  if [ "$code" = "000" ]; then
+    echo "  FEHLT   $h  (kein Verbindungsaufbau — Policy blockiert diesen Host)"
+    FEHLEN="$FEHLEN $h"
+  else
+    echo "  ok      $h  (HTTP $code)"
+  fi
+done
+
+if [ -n "$FEHLEN" ]; then
   echo
-  echo "huggingface.co ist noch gesperrt. Ohne diesen Host geht nichts weiter."
-  echo "Freigeben und eine FRISCHE Session starten — ein laufender Container"
-  echo "behaelt die Policy, mit der er gestartet ist."
+  echo "In die Allowlist eintragen — alle auf einmal, nicht nacheinander:"
+  for h in $FEHLEN; do echo "  $h"; done
+  echo
+  echo "Danach eine FRISCHE Session starten: ein laufender Container behaelt"
+  echo "die Policy, mit der er gestartet ist."
+  echo
+  echo "Ohne Netz laesst sich immerhin pruefen, ob die Pruefung Zaehne hat:"
+  echo "  python3 decode.py selbsttest"
   exit 1
-}
+fi
 
 echo
 echo "2) Weiterleitungsziel des eigentlichen Downloads"
@@ -34,16 +49,20 @@ ZIEL=$(curl -sSI --max-time 20 "$URL" 2>/dev/null \
        | tr -d '\r' | awk 'tolower($1)=="location:"{print $2}' | tail -1)
 if [ -z "$ZIEL" ]; then
   echo "  keine Weiterleitung gemeldet — dann laedt huggingface.co direkt aus."
-  CDN_HOST=huggingface.co
 else
   CDN_HOST=$(printf '%s' "$ZIEL" | sed -e 's|^https\{0,1\}://||' -e 's|/.*$||')
   echo "  Weiterleitung nach: $CDN_HOST"
-  pruefe "https://$CDN_HOST/" "$CDN_HOST" || {
-    echo
-    echo "Der Metadaten-Host ist frei, der Daten-Host nicht. In der Allowlist"
-    echo "zusaetzlich eintragen:  $CDN_HOST"
-    exit 1
-  }
+  case " $HOSTS " in
+    *" $CDN_HOST "*) ;;
+    *) code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "https://$CDN_HOST/" 2>/dev/null)
+       if [ "$code" = "000" ]; then
+         echo
+         echo "Neuer, oben nicht gelisteter Auslieferungshost. Zusaetzlich"
+         echo "eintragen:  $CDN_HOST"
+         exit 1
+       fi
+       echo "  ok      $CDN_HOST  (HTTP $code)" ;;
+  esac
 fi
 
 echo
