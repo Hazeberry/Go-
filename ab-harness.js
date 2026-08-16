@@ -52,6 +52,12 @@
                        per localStorage.getItem('go_pnet') exportiert).
                        Ohne die Option startet das Netz mit zufälligen
                        Gewichten und gamesPlayed = 0.
+     --nettrain <pfad> REINFORCE-Selbstspieltraining. Nach jeder Partie
+                       lernt das Netz aus BEIDEN Farben (getrennte Buffer,
+                       Reward je +1/-1) und schreibt die Gewichte nach
+                       <pfad> im Browser-Format. Nur im Standardmodus:
+                       im Paarmodus änderte sich die Engine zwischen den
+                       Partien und der A/B-Vergleich wäre hinfällig.
      --netgames <n>    gamesPlayed überschreiben. Nötig, weil blendWeight
                        unterhalb von 2 Spielen 0 zurückgibt: ohne diese
                        Option ist das Netz zwar geladen, aber wirkungslos,
@@ -544,6 +550,41 @@
    2.77e-3 bei Gleichverteilung, sind also fast flach. Eine
    Stärkemessung braucht trainierte Gewichte über --net.
 
+   ── Das Netz konnte nie lernen — auch nicht im Browser ────────
+   Vierter Fund derselben Familie, diesmal aber im PRODUKT und nicht
+   im Messrahmen. Der Kreis:
+
+     blendWeight ist 0, solange gamesPlayed < 2
+       → _netPriors bleibt null (Bedingung in triggerAIMove)
+       → applyAIResult schiebt nichts in _gameBuffer
+       → trainGame() bricht mit „Kein Buffer" ab, VOR gamesPlayed++
+       → gamesPlayed bleibt 0
+
+   Kein Ausgang: save() läuft nur in trainGame und reset(), load()
+   verwirft Gewichte abweichender Dimension. Es kann also nirgends
+   trainierte Gewichte geben, in keinem localStorage.
+
+   Behoben durch Trennung von BEOBACHTEN und STEUERN: Priors werden
+   bei jedem Hard-Zug gerechnet und aufgezeichnet, geblendet wird nur
+   bei blendWeight > 0. Dieselbe Trennung in getAIMove, sonst kann
+   auch ein Trainingslauf im Harness nichts lernen.
+
+   VORSICHT BEIM NACHWEIS — ich habe hier selbst danebengegriffen:
+   Der erste Browser-Test lief mit state.aiEnabled = false, triggerAIMove
+   kehrt dann in der ersten Zeile zurück. „Buffer bleibt 0 nach einem
+   KI-Zug" war also kein Befund, sondern eine nicht stattgefundene
+   Messung — und sie sah exakt so aus wie der echte Fund. Sauber
+   wiederholt (aiEnabled = true, Zug tatsächlich gespielt): HEAD Buffer
+   0 und gamesPlayed bleibt 0, mit Fix Buffer 1 und gamesPlayed 1.
+   Regel daraus: eine Messung, die den erwarteten Nullwert liefert,
+   braucht IMMER eine Gegenprobe, die zeigt, dass der Aufbau überhaupt
+   etwas hätte anzeigen können.
+
+   netMaxBlend steht seither auf 0. Den Kreis zu reparieren, ohne den
+   Wert zu senken, hätte die Eröffnung ab der zweiten Partie mit
+   Zufallsgewichten verrauscht (siehe Strukturbefund oben, Rang 221).
+   Das Netz lernt jetzt mit, ohne die Zugwahl zu berühren.
+
    ── Kennzahlen, die bei kleinen Stichproben NICHT gelesen werden ─
    Benson-Pässe und Passzahlen. Zwei Läufe mit je 40 Partien:
    Benson S 28 / W 45 gegen S 43 / W 0, Pässe 365/647 gegen 334/249.
@@ -573,7 +614,7 @@ function parseArgs(argv) {
     html: './index.html', games: 4, paired: 0, opening: 20, obudget: 100,
     budget: 250, maxMoves: 400, komi: 7.5,
     A: {spec: '', plain: {}, steps: {}}, B: {spec: '', plain: {}, steps: {}},
-    seed: null, json: null, net: null, netGames: 0
+    seed: null, json: null, net: null, netGames: 0, netTrain: null
   };
   /* Konfiguration = feste Werte plus optionale Phasenstufen (k@N=v).
      Ergebnisform: {spec, plain:{k:v}, steps:{k:[[abZug,wert],...]}} */
@@ -615,6 +656,7 @@ function parseArgs(argv) {
       case '--json': a.json = v; i++; break;
       case '--net': a.net = v; i++; break;
       case '--netgames': a.netGames = parseInt(v, 10); i++; break;
+      case '--nettrain': a.netTrain = v; i++; break;
       case '--help': console.log(fs.readFileSync(__filename, 'utf8')
         .split('*/')[0].replace(/^\/\*+[^\n]*\n/, '')); process.exit(0);
       default: console.error(`Unbekannte Option: ${k} (--help)`); process.exit(2);
@@ -794,6 +836,11 @@ const driver = `
       2: {first: null, total: 0, benson: 0}
     };
     const area = {};
+    /* Trainingspuffer GETRENNT je Farbe. Im Browser lernt nur die KI-Seite,
+       hier ziehen beide — mit entgegengesetztem Reward. Ein gemeinsamer
+       Puffer würde Sieger- und Verliererzüge mit demselben Vorzeichen
+       verstärken. */
+    const netBuf = {1: [], 2: []};
 
     while (mc < AB.maxMoves && passes < 2 && !resignedBy) {
       const color = (mc % 2 === 0) ? 1 : 2;
@@ -813,6 +860,7 @@ const driver = `
       _mctsSavedRoot = ms.root; _hopelessStreak = ms.hope; _allDeadStreak = ms.dead;
 
       const t0 = Date.now();
+      netFrisch = false;
       const res = getAIMove(board, color, Array.from(hist), {...caps},
                             mc, 'hard', 1, ko.point, lastIdx);
       const dt = Date.now() - t0;
@@ -837,6 +885,10 @@ const driver = `
         if (res.x === undefined || board[i] !== 0) {
           anomalies++; passes++; ko.point = null; mc++; continue;
         }
+        /* Dasselbe Tupel, das applyAIResult im Spiel puffert. */
+        if (AB.netTrain && netFrisch && policyNet._netPriors)
+          netBuf[color].push({inp: policyNet._netInp, probs: policyNet._netPriors,
+                              hidden: policyNet._netHidden, moveIdx: i});
         applyMove(board, color, res.x, res.y, ko, hist, caps);
         lastIdx = idx(res.x, res.y);
         passes = 0; mc++;
@@ -855,6 +907,18 @@ const driver = `
       winner  = score.b  > score.w  ? 1 : 2;
       winner0 = score0.b > score0.w ? 1 : 2;
     }
+    /* REINFORCE, beide Farben, danach Gewichte sichern. save() schreibt in
+       die localStorage-Schale, von dort in die Datei — genau das Format,
+       das der Browser liest. */
+    if (AB.netTrain) {
+      for (const c of [1, 2]) {
+        policyNet._gameBuffer = netBuf[c];
+        policyNet.trainGame(winner === c ? 1 : -1);
+      }
+      policyNet._gameBuffer = [];
+      require('fs').writeFileSync(AB.netTrain, localStorage.getItem('go_pnet') || '');
+    }
+
     return {winner, winner0, resignedBy, resignInfo, moves: mc,
             score, score0, st, anomalies, passSt, area,
             phaseSwitches: modState[1].phaseSwitches + modState[2].phaseSwitches,
@@ -1016,13 +1080,16 @@ const driver = `
   /* PolicyNet für den Messlauf scharf schalten. blendWeight liefert unter
      2 Spielen 0 — ohne --netgames ist das Netz zwar geladen, aber wirkungslos.
      Der Zähler auf forward() belegt hinterher, dass es tatsächlich lief. */
-  let netAufrufe = 0;
+  let netAufrufe = 0, netFrisch = false;
   if (globalThis.policyNet) {
     if (AB.netGames > 0) policyNet.gamesPlayed = AB.netGames;
     const _fwd = policyNet.forward.bind(policyNet);
-    policyNet.forward = inp => { netAufrufe++; return _fwd(inp); };
-  } else if (AB.netGames > 0) {
-    console.error('--netgames gesetzt, aber policyNet fehlt — <script id="policy-net"> nicht extrahiert?');
+    /* netFrisch unterscheidet „in DIESEM Zug gerechnet" von „steht noch
+       vom letzten Zug auf dem Objekt" — ohne das würde der Trainingspuffer
+       veraltete Priors mit dem aktuellen Zug verheiraten. */
+    policyNet.forward = inp => { netAufrufe++; netFrisch = true; return _fwd(inp); };
+  } else if (AB.netGames > 0 || AB.netTrain) {
+    console.error('--netgames/--nettrain gesetzt, aber policyNet fehlt — <script id="policy-net"> nicht extrahiert?');
     process.exit(2);
   }
 
@@ -1126,8 +1193,14 @@ const AB_CONFIG = {
   games: args.games, paired: args.paired, opening: args.opening,
   openingBudget: args.obudget, budget: args.budget, maxMoves: args.maxMoves,
   komi: args.komi, seed: args.seed, json: args.json,
-  net: args.net, netGames: args.netGames
+  net: args.net, netGames: args.netGames, netTrain: args.netTrain
 };
+
+if (args.netTrain && args.paired > 0) {
+  console.error('--nettrain und --paired schließen sich aus: das Netz änderte sich '
+    + 'zwischen den Partien eines Paares, der A/B-Vergleich wäre hinfällig.');
+  process.exit(2);
+}
 
 const t0 = Date.now();
 /* eslint-disable-next-line no-eval */
