@@ -47,13 +47,16 @@ nichts zu installieren.
 - **Die Zeitsteuerung ist Wall-Clock.** Auf langsamer Hardware sinkt die Zahl
   der Simulationen pro Zug und damit die Spielstärke. Ein fester Seed macht
   Läufe deshalb **nicht** reproduzierbar.
-- **Das Policy-Netz ist experimentell und ungemessen.** Ein kleines Dense-Netz
-  (3971→128→361) kann Wurzelzüge mitgewichten, trainiert per REINFORCE im
-  Selbstspiel. Bis August 2026 war es im Messrahmen überhaupt nicht vorhanden,
-  ein A/B darüber hätte also strukturell 50 % geliefert; das ist jetzt behoben,
-  aber noch nicht in Spielstärke umgerechnet. Der Netzbeitrag ist zudem
-  phasenunabhängig groß, während die Entscheidungsspanne der Heuristik es nicht
-  ist — in der Eröffnung dominiert der Prior, im Mittelspiel verschwindet er.
+- **Das Policy-Netz lernt, aber zu wenig, um zu helfen.** Ein kleines
+  Dense-Netz (3971→128→361) kann Wurzelzüge mitgewichten. Bis August 2026 war
+  es doppelt tot: im Messrahmen gar nicht vorhanden, und im Spiel in einem
+  geschlossenen Kreis gefangen, der `gamesPlayed` nie über 0 kommen ließ — es
+  hat also nie gelernt, bei niemandem. Beides ist behoben. Danach gemessen:
+  Distillation auf den Suchzug verbessert den mittleren Rang repliziert über
+  vier Initialisierungen (111,7 → 90,3 bei Zufallserwartung 101,3), aber die
+  Trefferquote im Kopf der Verteilung bleibt auf Zufallsniveau — der Suchzug
+  landet nie auf Rang 1. Für PUCT zählt nur der Kopf. `netMaxBlend` steht
+  deshalb auf 0: das Netz lernt mit, steuert aber nicht.
 
 ## Architektur
 
@@ -119,6 +122,7 @@ Simulationszahl pro Zug direkt an der Rechenleistung hängt.
 | `openContactResponse` (neuer Term in `evalOpening`) | 48,8 % über 80 Partien, p = 0,91 | verworfen — Default 0 |
 | `phaseNormalize` (Experten vor dem Blend normieren) | 42,5 % über 80 Partien, p = 0,22 | verworfen — Default 0 |
 | `rolloutSample`, `evaluateMove`-Expansion, FPU-Vorzeichen | 60 %, 61 %, ±0,005 ΔQ | abgelehnt bzw. ohne Stärkeeffekt eingebaut |
+| Policy-Netz, Rang des Suchzugs | 4 von 4 Initialisierungen besser (111,7 → 90,3), Top-10 aber auf Zufallsniveau | `netMaxBlend` bleibt 0 — kein A/B, es gibt nichts zu blenden |
 
 Zwei der Nullergebnisse sind **gehaltvoll, nicht leer**: Bei beiden ist per
 Verhaltensmessung belegt, dass der Parameter die Zugwahl ändert — bei

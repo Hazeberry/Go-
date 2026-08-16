@@ -585,6 +585,54 @@
    Zufallsgewichten verrauscht (siehe Strukturbefund oben, Rang 221).
    Das Netz lernt jetzt mit, ohne die Zugwahl zu berühren.
 
+   ── Was das Netz nach der Reparatur kann: zu wenig ─────────────
+   Zielgröße: Rang, den das Netz dem Zug gibt, den die SUCHE wählt.
+   Genau das ist die Aufgabe eines Priors — die Suche vorwegnehmen.
+
+   ACHTUNG, die Kennzahl ist extrem verrauscht. Zwei UNTRAINIERTE
+   Netze lagen auf 24 Stellungen bei Ø Rang 97 und 124, auf 36
+   Stellungen streuten vier Initialisierungen von 100 bis 126. Ich
+   habe daraus zuerst auf 12 Stellungen zwei Befunde abgeleitet, die
+   beide falsch waren („Zufallsnetz schlägt den Zufall", „netLR ist
+   zehnfach zu groß"). Unter etwa 30 Stellungen ist hier nichts
+   ablesbar, und ungepaarte Vergleiche zwischen zwei Gewichtssätzen
+   sind wertlos.
+
+   GEPAART und repliziert (identische 1680 Zug-Paare, identische 36
+   Probestellungen, nur die Startgewichte wechseln, netLR 1e-3,
+   Ziel = Suchzug, 5 Epochen; Zufallserwartung Ø Rang 101.3):
+
+     Init   Start → nach 5 Epochen     Top-10 am Ende
+       11   125.7 → 97.0               2/36
+       22   102.6 → 91.0               2/36
+       33   100.4 → 77.3               0/36
+       44   118.1 → 95.7               2/36
+
+   4 von 4 verbessern sich, im Mittel 111.7 → 90.3. Das Netz lernt
+   also — die Architektur ist nicht kaputt, und netLR 1e-3 ist nicht
+   zu hoch (1e-5 und kleiner bewegen praktisch nichts).
+
+   ABER: die Trefferquote im KOPF der Verteilung bleibt auf
+   Zufallsniveau. Top-10 von 36 Stellungen wäre bei Gleichverteilung
+   rund 1.6 — gemessen 0 bis 2. Der Suchzug landet nie auf Rang 1.
+   Gelernt wird eine grobe Lagepräferenz („wo auf dem Brett wird
+   überhaupt gespielt"), nicht, WELCHER Zug. Für PUCT zählt aber
+   allein der Kopf: ein Prior, der den gesuchten Zug im Mittel auf
+   Platz 90 von rund 225 legt, kann die Suche nicht lenken.
+
+   Konsequenz: ein A/B über netMaxBlend hat keinen Gegenstand. Es
+   gibt keine Priors, die zu blenden sich lohnt. Der Weg dahin führt
+   über Datenmenge und -qualität (Distillation aus starkem Spiel),
+   nicht über weiteres Selbstspiel und nicht über Parametertuning.
+
+   OFFEN, ausdrücklich nicht entschieden: ob das Lernziel Suchzug
+   (Distillation) besser ist als der bisherige ±Reward (REINFORCE).
+   Der Vergleich, den ich dazu gefahren habe, war UNGEPAART —
+   verschiedene Startgewichte, verschiedene Probensätze — und liegt
+   damit vollständig im oben gemessenen Rauschen. Wer das entscheiden
+   will, fährt beide Regeln auf denselben Daten, denselben
+   Startgewichten und mindestens vier Initialisierungen.
+
    ── Kennzahlen, die bei kleinen Stichproben NICHT gelesen werden ─
    Benson-Pässe und Passzahlen. Zwei Läufe mit je 40 Partien:
    Benson S 28 / W 45 gegen S 43 / W 0, Pässe 365/647 gegen 334/249.
