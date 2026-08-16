@@ -17,7 +17,7 @@ node dump_boards.js && python3 features_check.py
                                       # 1. numpy-Merkmale == JS-boardToInput?
 python3 decode.py pruefen             # 2. Stimmt KataGos Kanalbelegung?
 python3 decode.py bauen               # 3. Shards -> daten.npz
-python3 train.py daten.npz gewichte.json --epochen 8
+python3 train.py daten.npz gewichte.json --epochen 40 --lr 0.5
                                       # 4. Trainieren, Export im Browser-Format
 node export_check.js && python3 export_check.py
                                       # 5. Rechnet JS dieselben Priors?
@@ -28,6 +28,49 @@ node ../ab-harness.js --paired 30 --net gewichte.json \
 
 Schritt 6 ist der einzige, der über Einbauen entscheidet. Alles davor stellt
 nur sicher, dass ein Nullergebnis dort auch wirklich etwas bedeutet.
+
+## Was die Kette gemessen hat
+
+Ein vollständiger Durchlauf, jeder Schritt einzeln geprüft:
+
+| Schritt | Ergebnis |
+|---|---|
+| 0. Netz | Daten liegen auf `us.aws.cdn.hf.co`, nicht auf `huggingface.co` |
+| 1. Merkmale | 8 Bretter, **0 Abweichungen** numpy gegen JS |
+| 2. Kanäle | 400 Stellungen Freiheiten nachgerechnet, **0 Abweichungen**; Kanal 9 zu 100 % gegnerisch |
+| 3. Daten | 61 363 Zeilen aus vier val-Shards, 3 wegen besetztem Ziel verworfen |
+| 4. Training | Verlust 5,88 → 4,08; Top-1 1,2 %, Top-10 7,8 % (Zufall 0,28 % / 2,77 %) |
+| 5. Export | max. Abweichung 2,4e-07, argmax 8/8 gleich |
+| 6. Spielstärke | **18:42** über 60 gepaarte Partien, Paar-Bilanz 3:15, p = 0,008 |
+
+**Das Ergebnis ist negativ, und zwar deutlich.** Das Netz ist nachweislich
+besser als Zufall — Faktor 4 auf Top-1, Faktor 2,8 auf Top-10 — und macht die
+Engine mit `netMaxBlend=0,30` trotzdem schwächer, am Ende im Schnitt 15,5
+Punkte Gebiet hinten. Ein Prior, der in 98,8 % der Fälle nicht den Suchzug
+oben hat, zieht PUCT von der Suche weg, statt sie zu führen. Für einen
+Gewinn müsste die Kopfgüte um Größenordnungen steigen, nicht um Prozente.
+
+Die Kette selbst ist damit **nicht** widerlegt: Schritte 1, 2 und 5 schließen
+Merkmals-, Kanal- und Exportfehler aus, und ein Auswendiglern-Test (2000
+Zeilen, `lr 0.5`) treibt den Verlust auf 0,10 und Top-1 auf 0,9935 — Modell,
+Ziele und Gradient funktionieren. Was fehlt, ist Kapazität und Datenmenge:
+3971→128→361 auf 56 k Beispielen generalisiert kaum.
+
+### Zwei Fallen, die dabei aufgefallen sind
+
+**Die Lernrate war zu niedrig, und das sah aus wie Lernen.** Mit dem früher
+hier dokumentierten `--epochen 8` (lr 0,05) endete der Verlust bei 5,685 —
+`ln(361) = 5,889`, das Netz war praktisch noch gleichverteilt, Top-1 mit
+0,0024 sogar unter Zufall. Die Kurve fiel monoton und wirkte gesund. Erst der
+Auswendiglern-Test trennte „zu langsam" von „kaputt". `lr 2.0` ist die andere
+Kante: die ReLUs sterben, der Rang friert bei 134 ein.
+
+**Ein Zug auf einen besetzten Punkt.** `pruefen` meldete „auf besetztem Punkt
+0,0005" — ein Mittelwert, der wie Rundung aussah und eine echte Zeile war:
+genau 1 von 15 261 in `val/data0_0`, ein gegnerischer Stein in Atari, nicht
+der letzte Zug. Ein Shard-Artefakt, kein Mapping-Fehler. `bauen` filtert diese
+Zeilen jetzt und zählt sie; `pruefen` meldet absolute Zahlen, weil ein Anteil
+verschweigt, ob eine Zeile oder tausende betroffen sind.
 
 ## Die Dateien
 
