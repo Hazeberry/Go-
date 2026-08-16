@@ -633,6 +633,22 @@
    will, fährt beide Regeln auf denselben Daten, denselben
    Startgewichten und mindestens vier Initialisierungen.
 
+   ── Ein Instrument kann still seine Bedeutung verlieren ────────
+   POLICYNET zählte anfangs nur Vorwärtsläufe, mit der dokumentierten
+   Lesart „steht dort 0, misst der Lauf nichts". Die Trennung von
+   Beobachten und Steuern hat genau diese Aussage entwertet: seither
+   rechnet das Netz bei JEDEM Hard-Zug, auch bei netMaxBlend = 0.
+   Ein A/B über netMaxBlend hätte also eine große Zahl gesehen und
+   daraus geschlossen, der Parameter greife — während die eine Seite
+   gar nicht blendete. Aufgefallen beim Durchtesten der Pipeline:
+   2 Partien à 40 Züge meldeten 80 Vorwärtsläufe, obwohl nur eine
+   Konfiguration blendete.
+
+   Jetzt zwei Zahlen: Vorwärtsläufe und davon solche mit Wirkung.
+   Gegengeprüft — A 0.30 gegen B 0: 80/40. A 0.30 gegen B 0.30: 80/80.
+   Merksatz fürs nächste Mal: Wer eine Bedingung im Code aufteilt,
+   muss prüfen, ob ein Zähler noch dasselbe zählt wie vorher.
+
    ── Kennzahlen, die bei kleinen Stichproben NICHT gelesen werden ─
    Benson-Pässe und Passzahlen. Zwei Läufe mit je 40 Partien:
    Benson S 28 / W 45 gegen S 43 / W 0, Pässe 365/647 gegen 334/249.
@@ -912,6 +928,7 @@ const driver = `
       const res = getAIMove(board, color, Array.from(hist), {...caps},
                             mc, 'hard', 1, ko.point, lastIdx);
       const dt = Date.now() - t0;
+      if (netFrisch && policyNet._netBlend > 0) netGeblendet++;
 
       ms.root = _mctsSavedRoot; ms.hope = _hopelessStreak; ms.dead = _allDeadStreak;
       const s = st[color]; s.moves++; s.timeMs += dt;
@@ -1118,8 +1135,9 @@ const driver = `
     /* Erreichbarkeitsnachweis für das Netz, analog zu PHASENWECHSEL: steht
        hier 0, hat der Blend-Zweig in getAIMove nie gefeuert und ein A/B über
        netMaxBlend misst nichts. */
-    if (AB.netGames > 0 || netAufrufe)
-      console.log('POLICYNET: ' + netAufrufe + ' Vorwärtsläufe · gamesPlayed '
+    if (AB.netGames > 0 || AB.netTrain || netAufrufe)
+      console.log('POLICYNET: ' + netAufrufe + ' Vorwärtsläufe, davon '
+        + netGeblendet + ' mit Wirkung auf die Zugwahl · gamesPlayed '
         + (globalThis.policyNet ? policyNet.gamesPlayed : '—')
         + ' · Gewichte ' + (AB.net ? AB.net : 'zufällig'));
     console.log(line);
@@ -1128,7 +1146,13 @@ const driver = `
   /* PolicyNet für den Messlauf scharf schalten. blendWeight liefert unter
      2 Spielen 0 — ohne --netgames ist das Netz zwar geladen, aber wirkungslos.
      Der Zähler auf forward() belegt hinterher, dass es tatsächlich lief. */
-  let netAufrufe = 0, netFrisch = false;
+  /* ZWEI Zähler, nicht einer. Seit Beobachten und Steuern getrennt sind,
+     läuft das Netz bei jedem Hard-Zug — ein Vorwärtslauf beweist also
+     nicht mehr, dass der Prior die Zugwahl berührt hat. Geblendet wird nur
+     bei blendWeight > 0, und genau das muss ein A/B über netMaxBlend
+     belegen können. Stünde hier weiterhin eine Zahl, wäre die alte Aussage
+     „0 heißt, der Lauf misst nichts" still falsch geworden. */
+  let netAufrufe = 0, netGeblendet = 0, netFrisch = false;
   if (globalThis.policyNet) {
     if (AB.netGames > 0) policyNet.gamesPlayed = AB.netGames;
     const _fwd = policyNet.forward.bind(policyNet);
@@ -1228,7 +1252,7 @@ const driver = `
                   budgetMs: AB.budget, komi: AB.komi,
                   seed: AB.seed, modus: AB.paired > 0 ? 'paired' : 'standard',
                   netz: AB.net || null, netzSpiele: AB.netGames,
-                  netzVorwaertslaeufe: netAufrufe};
+                  netzVorwaertslaeufe: netAufrufe, netzGeblendet: netGeblendet};
     require('fs').writeFileSync(AB.json, JSON.stringify(raw, null, 1));
     console.log('Rohdaten → ' + AB.json);
   }
