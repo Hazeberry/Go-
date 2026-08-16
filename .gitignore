@@ -14,3 +14,10 @@ npm-debug.log*
 Thumbs.db
 *.swp
 *~
+
+# Erzeugnisse der Distillation-Pipeline (distillation/README.md). Gewichte
+# sind reproduzierbar und mehrere Megabyte gross — sie gehoeren nicht ins Repo.
+distillation/*.npz
+distillation/*.json
+__pycache__/
+*.pyc

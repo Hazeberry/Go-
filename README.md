@@ -168,7 +168,10 @@ Harness `undefined`, der Blend-Zweig damit tot. Und selbst nach der Extraktion
 blieb ein zweites stilles Tor — `blendWeight` liefert unter zwei gespielten
 Partien 0. Vor der Deutung eines Nullergebnisses gehört deshalb der Nachweis,
 dass der Parameter im Messaufbau überhaupt erreichbar *und* wirksam war; der
-Harness zählt dafür `PHASENWECHSEL` und `POLICYNET`-Vorwärtsläufe mit.
+Harness zählt dafür `PHASENWECHSEL` mit, und für das Netz **zwei** Zahlen —
+Vorwärtsläufe und davon solche mit Wirkung auf die Zugwahl. Ein Zähler
+genügte nicht: seit Beobachten und Steuern getrennt sind, läuft das Netz bei
+jedem Zug, ohne deshalb etwas zu bewirken.
 
 Abgelehnte Befunde stehen als Kommentar an der jeweiligen Codestelle. Sonst
 wird derselbe Versuch in einem Jahr erneut gefahren und die Untersuchungskosten
@@ -179,8 +182,14 @@ fallen zweimal an.
 ```
 index.html                      Spiel und Engine, eine Datei
 ab-harness.js                   Messrahmen; Kopfkommentar = Versuchsprotokoll
+distillation/                   Überwachtes Training fürs Policy-Netz
 .github/workflows/ab-harness.yml  Messläufe in CI, manuell startbar
 ```
+
+[`distillation/`](distillation/) enthält die Kette, um dem Policy-Netz starke
+Züge beizubringen, statt es aus Selbstspiel lernen zu lassen — samt der
+Prüfungen, die sicherstellen, dass ein Nullergebnis am Ende auch wirklich
+eines ist.
 
 ## Lizenz
 
