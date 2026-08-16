@@ -85,14 +85,18 @@ def pruefen(pfad, grenze=3000):
     kein_pass = zug < AREA
     besetzt = bin_[idx][kein_pass, 1:3, :].sum(axis=1)[
         np.arange(kein_pass.sum()), zug[kein_pass]]
+    # Absolut zaehlen, nicht nur mitteln: ein Anteil von 0.0005 verschweigt,
+    # ob eine Zeile von 2000 oder 2000 von 4 Mio. betroffen sind.
     print(f"  Policy-Ziel: Pass-Anteil {1 - kein_pass.mean():.3f}, "
-          f"auf besetztem Punkt {besetzt.mean():.4f}  (muss 0 sein)")
+          f"auf besetztem Punkt {int(besetzt.sum())} von {int(kein_pass.sum())}"
+          f"  (bauen wirft diese Zeilen weg)")
     print(f"  Policy-Summe 0 (unbrauchbare Zeilen): "
           f"{(pol[idx].sum(axis=1) == 0).mean():.4f}")
 
 
 def bauen(pfade, ziel="daten.npz", max_zeilen=200000):
     X, Y = [], []
+    verworfen = 0
     for pfad in pfade:
         bin_, pol, C, N = laden(pfad)
         voll = bin_[:, 0, :].sum(axis=1) == AREA
@@ -107,6 +111,11 @@ def bauen(pfade, ziel="daten.npz", max_zeilen=200000):
             board = np.zeros(AREA, dtype=np.int8)
             board[bin_[r, 1, :] == 1] = 1
             board[bin_[r, 2, :] == 1] = 2
+            if board[zug]:
+                # Selten (gemessen 1 von 15261 in val/data0_0), aber ein Zug auf
+                # einen besetzten Punkt ist illegal — als Ziel waere er gelogen.
+                verworfen += 1
+                continue
             ko = np.nonzero(bin_[r, 6, :])[0]
             l9 = np.nonzero(bin_[r, 9, :])[0]
             X.append(board_to_input(board, 1,
@@ -119,7 +128,8 @@ def bauen(pfade, ziel="daten.npz", max_zeilen=200000):
     Xa = np.asarray(X, dtype=np.float32)
     Ya = np.asarray(Y, dtype=np.int32)
     np.savez_compressed(ziel, X=Xa, Y=Ya)
-    print(f"{ziel}: X {Xa.shape} {Xa.dtype}, Y {Ya.shape}")
+    print(f"{ziel}: X {Xa.shape} {Xa.dtype}, Y {Ya.shape}, "
+          f"{verworfen} Zeilen wegen besetztem Ziel verworfen")
 
 
 if __name__ == "__main__":
