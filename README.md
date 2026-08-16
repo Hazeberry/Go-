@@ -47,9 +47,16 @@ nichts zu installieren.
 - **Die Zeitsteuerung ist Wall-Clock.** Auf langsamer Hardware sinkt die Zahl
   der Simulationen pro Zug und damit die Spielstärke. Ein fester Seed macht
   Läufe deshalb **nicht** reproduzierbar.
-- **Das Policy-Netz ist experimentell.** Ein kleines Dense-Netz (3971→128→361)
-  kann Wurzelzüge mitgewichten, trainiert per REINFORCE im Selbstspiel. Es ist
-  standardmäßig schwach gewichtet und bringt keinen belegten Gewinn.
+- **Das Policy-Netz lernt, aber zu wenig, um zu helfen.** Ein kleines
+  Dense-Netz (3971→128→361) kann Wurzelzüge mitgewichten. Bis August 2026 war
+  es doppelt tot: im Messrahmen gar nicht vorhanden, und im Spiel in einem
+  geschlossenen Kreis gefangen, der `gamesPlayed` nie über 0 kommen ließ — es
+  hat also nie gelernt, bei niemandem. Beides ist behoben. Danach gemessen:
+  Distillation auf den Suchzug verbessert den mittleren Rang repliziert über
+  vier Initialisierungen (111,7 → 90,3 bei Zufallserwartung 101,3), aber die
+  Trefferquote im Kopf der Verteilung bleibt auf Zufallsniveau — der Suchzug
+  landet nie auf Rang 1. Für PUCT zählt nur der Kopf. `netMaxBlend` steht
+  deshalb auf 0: das Netz lernt mit, steuert aber nicht.
 
 ## Architektur
 
@@ -60,11 +67,14 @@ im Browser *und* im Messrahmen identisch läuft:
 |---|---|
 | `<script id="shared-go-logic">` | Regeln, Zobrist-Hashing, Freiheiten, Benson — DOM-frei |
 | `<script id="worker-ai">` | MCTS, Bewertungsfunktionen, Rollouts — DOM-frei |
-| Haupt-Skript | UI, Rendering, Worker-Verwaltung, Dashboard, Policy-Netz |
+| `<script id="policy-net">` | Policy-Netz: Features, Forward, REINFORCE-Training |
+| Haupt-Skript | UI, Rendering, Worker-Verwaltung, Dashboard |
 
-Die beiden DOM-freien Blöcke werden vom Messrahmen zur Laufzeit aus der
-`index.html` extrahiert. Es gibt also **kein Code-Duplikat**: Gemessen wird
-exakt der Stand, der auch im Browser läuft.
+Alle drei ID-Blöcke werden vom Messrahmen zur Laufzeit aus der `index.html`
+extrahiert. Es gibt also **kein Code-Duplikat**: Gemessen wird exakt der Stand,
+der auch im Browser läuft. Die ersten beiden Blöcke sind DOM-frei; `policy-net`
+fasst `localStorage` und `document.getElementById` an und bekommt beide vom
+Messrahmen als Schale gestellt, statt im Code zu verzweigen.
 
 ### Bewertung
 
@@ -112,6 +122,7 @@ Simulationszahl pro Zug direkt an der Rechenleistung hängt.
 | `openContactResponse` (neuer Term in `evalOpening`) | 48,8 % über 80 Partien, p = 0,91 | verworfen — Default 0 |
 | `phaseNormalize` (Experten vor dem Blend normieren) | 42,5 % über 80 Partien, p = 0,22 | verworfen — Default 0 |
 | `rolloutSample`, `evaluateMove`-Expansion, FPU-Vorzeichen | 60 %, 61 %, ±0,005 ΔQ | abgelehnt bzw. ohne Stärkeeffekt eingebaut |
+| Policy-Netz, Rang des Suchzugs | 4 von 4 Initialisierungen besser (111,7 → 90,3), Top-10 aber auf Zufallsniveau | `netMaxBlend` bleibt 0 — kein A/B, es gibt nichts zu blenden |
 
 Zwei der Nullergebnisse sind **gehaltvoll, nicht leer**: Bei beiden ist per
 Verhaltensmessung belegt, dass der Parameter die Zugwahl ändert — bei
@@ -151,9 +162,13 @@ statt sie nachzuschieben.
 **Werkzeugfehler sehen aus wie Nullergebnisse.** Der Harness übergab
 `getAIMove` jahrelang `lastMove = null`, während das Spiel den echten Wert
 übergibt. Der davon abhängige Lokalitätsterm konnte im Harness also gar nicht
-feuern — ein A/B darüber hätte strukturell 50 % geliefert. Vor der Deutung
-eines Nullergebnisses gehört deshalb der Nachweis, dass der Parameter im
-Messaufbau überhaupt erreichbar war.
+feuern — ein A/B darüber hätte strukturell 50 % geliefert. Dasselbe beim
+Policy-Netz: die Klasse stand im Haupt-Skript, `globalThis.policyNet` war im
+Harness `undefined`, der Blend-Zweig damit tot. Und selbst nach der Extraktion
+blieb ein zweites stilles Tor — `blendWeight` liefert unter zwei gespielten
+Partien 0. Vor der Deutung eines Nullergebnisses gehört deshalb der Nachweis,
+dass der Parameter im Messaufbau überhaupt erreichbar *und* wirksam war; der
+Harness zählt dafür `PHASENWECHSEL` und `POLICYNET`-Vorwärtsläufe mit.
 
 Abgelehnte Befunde stehen als Kommentar an der jeweiligen Codestelle. Sonst
 wird derselbe Versuch in einem Jahr erneut gefahren und die Untersuchungskosten

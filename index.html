@@ -685,8 +685,22 @@ globalThis.PARAMS = {
   raveEnabled:         1,    // 0 = aus, reines PUCT wie vorher
   raveK:             300,    // AMAF-Einfluss; höher = länger stark gewichtet
   mctsTreeReuse:       1,    // 0 = aus, immer frischer Baum
-  /* PolicyNet — FIX Bug 5: wurde referenziert aber nie definiert */
-  netMaxBlend:      0.30,
+  /* PolicyNet — FIX Bug 5: wurde referenziert aber nie definiert.
+     netMaxBlend steht auf 0: das Netz lernt mit, steuert aber nicht.
+     Grund ist nicht Vorsicht, sondern eine Messung. Der Netzbeitrag ist
+     blendWeight · p · netScoreScale und phasenUNabhängig groß; die
+     Entscheidungsspanne von evaluateMove ist es nicht (Eröffnung ≈ 15.8,
+     Mittelspiel ≈ 160). Mit ungelernten, fast flachen Priors
+     (1.36e-3 … 5.15e-3 gegen 2.77e-3 bei Gleichverteilung) überschreibt
+     der Prior in der Eröffnung deshalb die Heuristik — in einer
+     gemessenen Stellung fiel der bisherige beste Zug auf Rang 221.
+     Vorher war der Wert 0.30, wirkte aber nie, weil das Netz durch den
+     oben beschriebenen Kreis nie über gamesPlayed = 0 hinauskam. Ihn zu
+     reparieren, ohne den Wert zu senken, hätte die Eröffnung ab der
+     zweiten Partie mit Zufallsgewichten verrauscht. Hochsetzen, sobald
+     ein A/B mit trainierten Gewichten einen Gewinn belegt — im
+     Dashboard jederzeit möglich. */
+  netMaxBlend:      0.00,
   netWarmup:         10,
   netLR:           0.001,
   netScoreScale:   5000,
@@ -1641,12 +1655,25 @@ function getAIMove(board, aiColor, histHashes, captures, mc, diff, reqId, koPoin
      der alte Code crashte dort mit TypeError, sobald blendWeight > 0 war
      (ab 2 Spielen), und die Hard-KI lief ab dann bei JEDEM Zug synchron
      im UI-Thread. Jetzt: Worker nutzt die übergebenen Priors, nur der
-     Haupt-Thread rechnet selbst. */
-  if (diff === 'hard' && globalThis.policyNet && policyNet.blendWeight > 0) {
+     Haupt-Thread rechnet selbst.
+
+     Und dieselbe Trennung wie im Haupt-Thread: der Zweig läuft jetzt
+     unabhängig von blendWeight, damit das Netz auch während des Warmups
+     Priors sieht und aufzeichnen kann. Geblendet wird erst weiter unten,
+     und nur wenn blendWeight > 0 ist. Ohne diese Trennung kann ein
+     Selbstspiel-Trainingslauf im Harness nichts lernen — derselbe
+     geschlossene Kreis wie im Spiel. */
+  if (diff === 'hard' && globalThis.policyNet) {
     const _bw = policyNet.blendWeight;
     let _p = null, _h = null, _inp = null;
     if (typeof policyNet.forward === 'function') {
-      _inp = policyNet.boardToInput(board, aiColor, policyNet._lastMove || null, koPoint);
+      /* Letzten Zug aus dem EIGENEN Parameter ableiten, nicht aus dem
+         Seitenkanal policyNet._lastMove. Im Browser ist beides derselbe
+         Wert (state.lastMove wird oben gesetzt und hier übergeben), im
+         Harness setzt niemand _lastMove — Feature-Layer 8 wäre dort also
+         dauerhaft leer gewesen, während er im Spiel gefüllt ist. */
+      const _lm = _lastMoveIdx >= 0 ? {x: xOf(_lastMoveIdx), y: yOf(_lastMoveIdx)} : null;
+      _inp = policyNet.boardToInput(board, aiColor, _lm, koPoint);
       const _r = policyNet.forward(_inp);
       _p = _r.probs; _h = _r.hidden;
     } else {
@@ -1655,10 +1682,12 @@ function getAIMove(board, aiColor, histHashes, captures, mc, diff, reqId, koPoin
     if (_p) {
       policyNet._netPriors = _p; policyNet._netHidden = _h;
       policyNet._netInp    = _inp; policyNet._netBlend  = _bw;
-      scored.forEach(s => {
-        s.score = (1-_bw)*s.score + _bw * _p[s.m.idx] * PARAMS.netScoreScale;
-      });
-      scored.sort((a,b) => b.score - a.score);
+      if (_bw > 0) {
+        scored.forEach(s => {
+          s.score = (1-_bw)*s.score + _bw * _p[s.m.idx] * PARAMS.netScoreScale;
+        });
+        scored.sort((a,b) => b.score - a.score);
+      }
     }
   }
   _areaCacheValid = false;
@@ -2245,7 +2274,27 @@ function triggerAIMove() {
   for (let i = 0; i < BOARD_SIZE; i++) if (state.board[i] === 0) _emptyCount++;
 
   let _netInp = null, _netPriors = null, _netHidden = null;
-  if (globalThis.policyNet && policyNet.blendWeight > 0 && state.aiDifficulty === 'hard') {
+  /* BEOBACHTEN und STEUERN sind zwei verschiedene Dinge. Hier stand
+     zusätzlich `policyNet.blendWeight > 0` — und daraus wurde ein
+     geschlossener Kreis, der das Netz dauerhaft tot hielt:
+
+       blendWeight ist 0, solange gamesPlayed < 2
+         → _netPriors bleibt null
+         → applyAIResult schiebt nichts in _gameBuffer
+         → trainGame() bricht mit „Kein Buffer" ab, VOR gamesPlayed++
+         → gamesPlayed bleibt 0
+
+     Es gibt keinen Pfad aus diesem Kreis: save() läuft nur in trainGame
+     und reset(), und load() verwirft alte Gewichte mit abweichender
+     Dimension. Im Browser verifiziert — nach einem echten KI-Zug ist der
+     Buffer leer und trainGame lässt gamesPlayed auf 0. Das Netz hat also
+     noch nie gelernt, bei niemandem.
+
+     Jetzt rechnet das Netz bei jedem Hard-Zug seine Priors und zeichnet
+     sie auf; ob sie in die Zugwahl EINGEHEN, entscheidet weiterhin
+     allein blendWeight (die Bedingung dafür steht in getAIMove). Kosten:
+     ein Vorwärtslauf pro Zug, rund 508 000 Multiplikationen. */
+  if (globalThis.policyNet && state.aiDifficulty === 'hard') {
     /* Letzten Zug mitgeben — Feature-Layer 8 war vorher immer leer */
     const _lm = state.lastMove !== null ? {x: xOf(state.lastMove), y: yOf(state.lastMove)} : null;
     policyNet._lastMove = _lm;
@@ -2582,7 +2631,13 @@ function updateUI(msg='') {
     const nwEl = document.getElementById('nw-indicator');
     if (nwEl) {
       const bw = policyNet.blendWeight;
-      if (bw <= 0) { nwEl.textContent='🧠'; nwEl.title='PolicyNet: Warmup'; nwEl.style.opacity='.35'; }
+      if (bw <= 0) { nwEl.textContent='🧠'; nwEl.style.opacity='.35';
+        /* Zwei verschiedene Gründe für blendWeight 0 — sie zu verwechseln
+           hat das tote Netz lange verdeckt. */
+        nwEl.title = PARAMS.netMaxBlend <= 0
+          ? `PolicyNet: lernt mit, steuert nicht (netMaxBlend 0) · ${policyNet.gamesPlayed} Spiele`
+          : `PolicyNet: Warmup · ${policyNet.gamesPlayed} von ${PARAMS.netWarmup} Spielen`;
+      }
       else { nwEl.textContent=`🧠${(bw*100).toFixed(0)}%`; nwEl.title=`PolicyNet aktiv · ${policyNet.gamesPlayed} Spiele · ${Math.round(policyNet.wins/policyNet.gamesPlayed*100)}% Siege`; nwEl.style.opacity='1'; nwEl.style.color=bw>0.15?'var(--green)':'var(--wood)'; }
     }
     policyNet.dashUpdate();
@@ -2763,7 +2818,14 @@ document.getElementById('btn-bug-report').addEventListener('click', () => {
 });
 render();updateUI();updateAIStatus();updateUndoButton();
 </script>
-<script>
+<!-- Dritter extrahierbarer Block. Der Messrahmen (ab-harness.js) zieht sich
+     shared-go-logic, worker-ai und policy-net zur Laufzeit aus dieser Datei;
+     ohne id war das Netz im Harness schlicht nicht vorhanden, `globalThis
+     .policyNet` blieb undefined und die Blend-Bedingung in getAIMove konnte
+     nie feuern — ein A/B über netMaxBlend hätte strukturell 50 % geliefert.
+     Der Block ist nicht DOM-frei (localStorage, getElementById); der Harness
+     stellt beide Objekte als Schale bereit, statt hier zu verzweigen. -->
+<script id="policy-net">
 'use strict';
 
 class PolicyNet {
