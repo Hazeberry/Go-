@@ -182,8 +182,14 @@ fallen zweimal an.
 ```
 index.html                      Spiel und Engine, eine Datei
 ab-harness.js                   Messrahmen; Kopfkommentar = Versuchsprotokoll
+distillation/                   Überwachtes Training fürs Policy-Netz
 .github/workflows/ab-harness.yml  Messläufe in CI, manuell startbar
 ```
+
+[`distillation/`](distillation/) enthält die Kette, um dem Policy-Netz starke
+Züge beizubringen, statt es aus Selbstspiel lernen zu lassen — samt der
+Prüfungen, die sicherstellen, dass ein Nullergebnis am Ende auch wirklich
+eines ist.
 
 ## Lizenz
 
