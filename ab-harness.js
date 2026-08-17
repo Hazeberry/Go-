@@ -483,6 +483,27 @@
    Daraus eine Empfehlung fuer kuenftige Erstlaeufe: ZWEI Seeds
    PARALLEL statt eines laengeren Laufs. Gleiche Wanduhrzeit, aber
    ein Fehlalarm faellt sofort auf statt erst im Bestaetigungslauf.
+
+   DASSELBE GILT FUER LAUFZEIT-VERGLEICHE, und dort faellt es leichter
+   herein. Beim inkrementellen JSON-Schreiben stand der Verdacht im
+   Raum, es koste Sims/Zug — die Rohzahlen sahen sogar nach dem
+   Gegenteil aus (65-70 vorher, 75-77 nachher). ALTERNIEREND gemessen,
+   6 Runden je Version, gleiche Konfiguration und Seed, --budget 50:
+     Original  90 78 88 85 88 84  -> Mittel 85.2, SD 4.4
+     mit Patch 92 81 91 83 86 84  -> Mittel 86.1, SD 4.3
+     gepaart   +0.92 Sims/Zug (+1.1 %), SD 2.29, t = 0.98 bei n = 6
+   Kein Effekt. Entscheidend ist nicht der Mittelwert, sondern die
+   Streuung: allein die UNVERAENDERTE Version schwankt zwischen 78 und
+   90 Sims. Die vermutete Differenz von ~9 liegt vollstaendig darin.
+   Zwei Warnzeichen, an denen so etwas frueh auffaellt: (1) die
+   Richtung — eine Aenderung, die nur Arbeit HINZUFUEGT, kann nicht
+   schneller machen; wer sie schneller misst, misst etwas anderes,
+   meist die CPU-Erwaermung des zuerst gelaufenen Blocks. (2) der
+   fehlende Mechanismus — das writeFileSync liegt ZWISCHEN den
+   Partien, nie waehrend der Suche, und kostet bei 30 Paaren (~65 KB)
+   2.9 ms gegen ~150000 ms Partiedauer, also 0.002 %.
+   REGEL: Laufzeit-Vergleiche zweier Codestaende NIE blockweise, immer
+   alternierend — sonst misst man den Runner, nicht den Code.
    Nicht belegte, aber passende Lesart: Der Schalter schiebt den
    Kipppunkt von 16 auf 22, ueber den nominellen Punkt hinaus. Ist
    die fruehe Uebergabe an den taktischen Experten gut, waere
