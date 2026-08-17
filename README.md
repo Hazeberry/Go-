@@ -68,12 +68,16 @@ nichts zu installieren.
   Gegentest mit 800 kam auf 41,7 %, schaltete das Netz dabei aber weitgehend ab
   (0,06×–0,35×) und belegt daher keine Neutralität. `netMaxBlend` bleibt 0.
 
-  Der offene Punkt liegt woanders: der Abstand zwischen bestem und zweitbestem
-  Heuristikzug ist in Eröffnung und Mittelspiel praktisch **null** (0,0–0,5 bei
-  einer Spanne von 45–236). Die Heuristik ist an ihrer Spitze indifferent, also
-  entscheidet der Prior dort bei jeder Skala — ein Netz mit Top-1 1,2 % genau
-  dort, wo es fast Zufall einbringt. Um nur Gleichstände zu brechen, genügte
-  eine Skala von ≈ 20; alle Läufe lagen mindestens 40× darüber. **Ungetestet.**
+  Kalibrierung ist als Erklärung **erschöpft**. Über eine 250-fache
+  Skalenspanne ergibt sich eine monotone Dosis-Wirkungs-Kurve, die von unten
+  gegen 50 % läuft: 35,0 % (Skala 5000), 41,7 % (800), 46,7 % (20, ab Zug 250
+  auf 1000). Wäre die Skala nur falsch eingestellt, müsste eine Zwischendosis
+  über 50 % schießen — keine tut es, und das beste Ergebnis ist dasjenige, bei
+  dem das Netz fast nichts tut. Der Engpass ist die Kopfgüte: der Abstand
+  zwischen bestem und zweitbestem Heuristikzug ist in Eröffnung und Mittelspiel
+  praktisch null (Gap 0,0–0,5 bei einer Spanne von 45–236), dort entscheidet
+  der Prior bei jeder Skala — und ein Netz mit Top-1 1,2 % bringt dort fast
+  Zufall ein.
 
 ## Architektur
 
@@ -140,7 +144,7 @@ Simulationszahl pro Zug direkt an der Rechenleistung hängt.
 | `phaseNormalize` (Experten vor dem Blend normieren) | 42,5 % über 80 Partien, p = 0,22 | verworfen — Default 0 |
 | `rolloutSample`, `evaluateMove`-Expansion, FPU-Vorzeichen | 60 %, 61 %, ±0,005 ΔQ | abgelehnt bzw. ohne Stärkeeffekt eingebaut |
 | Policy-Netz, Rang des Suchzugs | 4 von 4 Initialisierungen besser (111,7 → 90,3), Top-10 aber auf Zufallsniveau | `netMaxBlend` bleibt 0 — kein A/B, es gibt nichts zu blenden |
-| KataGo-Distillation, `netMaxBlend` 0,30 gegen 0 | 35,0 % über 120 Partien bei `netScoreScale` 5000, p = 0,003 — Skala gemessen kommensurabel (0,4×–5,6× der Spanne). Gegentest mit 800: 41,7 %, aber Netz dabei weitgehend abgeschaltet | `netMaxBlend` bleibt 0. Offen: Skala ≈ 20 (nur Gleichstände brechen) — die Heuristik ist an der Spitze indifferent (Gap 0,0–0,5) |
+| KataGo-Distillation, `netMaxBlend` 0,30 gegen 0 | vier Läufe über 250-fache Skalenspanne, monoton von unten gegen 50 %: 35,0 % (5000, p = 0,003), 41,7 % (800), 46,7 % (20→1000, p = 0,82) | verworfen — `netMaxBlend` bleibt 0. Keine Dosis über 50 %, also **kein** Kalibrierungsproblem; Engpass ist die Kopfgüte |
 | Entscheidungsspanne von `evaluateMove`, gemessen | Spanne zum Median 45–1206, Gap zum Zweitbesten aber 0,0–0,5 in Eröffnung und Mittelspiel | Jeder Prior kippt dort die Zugwahl, unabhängig von `netScoreScale` — Kalibrierung allein kann das nicht steuern |
 
 Zwei der Nullergebnisse sind **gehaltvoll, nicht leer**: Bei beiden ist per

@@ -41,7 +41,7 @@ Ein vollständiger Durchlauf, jeder Schritt einzeln geprüft:
 | 3. Daten | 61 363 Zeilen aus vier val-Shards, 3 wegen besetztem Ziel verworfen |
 | 4. Training | Verlust 5,88 → 4,08; Top-1 1,2 %, Top-10 7,8 % (Zufall 0,28 % / 2,77 %) |
 | 5. Export | max. Abweichung 2,4e-07, argmax 8/8 gleich |
-| 6. Spielstärke | kein Gewinn in drei Läufen: 30,0 %, 40,0 % (Skala 5000) und 41,7 % (Skala 800) |
+| 6. Spielstärke | kein Gewinn bei vier Läufen über 250-fache Skalenspanne: 35,0 % (5000), 41,7 % (800), 46,7 % (20→1000) |
 
 **Das Ergebnis ist negativ.** Das Netz ist nachweislich besser als Zufall —
 Faktor 4 auf Top-1, Faktor 2,8 auf Top-10 — und macht die Engine mit
@@ -108,8 +108,40 @@ dort einbringt, ist fast Zufall.
 
 Die untere Kante ist rechnerisch klar: um nur Gleichstände zu brechen, ohne
 echte Heuristikunterschiede zu überschreiben, genügt eine Skala von **≈ 20**
-(Gap-Spalte). Dieser Bereich ist **ungetestet** — alle drei Läufe lagen
-mindestens 40× darüber.
+(Gap-Spalte), ab dem Endspiel steigend auf ≈ 1000–4600.
+
+### Die Dosis-Wirkungs-Kurve — damit ist Kalibrierung erschöpft
+
+Genau diese Gap-kalibrierte Stufe wurde gefahren: `netScoreScale=20`,
+ab Zug 250 auf 1000. Der Phasenwechsel griff 55-mal, die Stufe war also
+wirksam.
+
+| Skala | Spiele A:B | Siegrate A | Paar-Bilanz | p | Gebiet am Ende (A) |
+|---|---|---|---|---|---|
+| 5000 (2 Läufe) | 42:78 | 35,0 % | 8:26 | 0,003 | −7 bis −16 |
+| 800 | 25:35 | 41,7 % | 6:11 | 0,332 | −9,4 |
+| 20 → 1000 ab Zug 250 | 28:32 | 46,7 % | 8:10 | 0,815 | −0,7 |
+
+**Die Kurve ist monoton und läuft von unten gegen 50 %.** Je kleiner der
+Netzeinfluss, desto näher am Break-even — und der Grenzwert bei Dosis 0 ist
+definitionsgemäß 50 %, weil A dann zu B wird.
+
+Das ist der Schluss des Kapitels: **wäre die Skala nur falsch eingestellt,
+müsste irgendeine Zwischendosis über 50 % schießen.** Über eine
+250-fache Spannweite (20 bis 5000) tut es keine. Das beste Ergebnis ist
+dasjenige, bei dem das Netz fast nichts tut. Ein Prior mit nutzbarem Signal
+verhält sich nicht so; ein Prior ohne nutzbares Signal genau so — Schaden
+proportional zur Dosis, kein Optimum dazwischen.
+
+Kalibrierung ist damit als Erklärung **erschöpft**, nicht offen. Der Engpass
+ist die Kopfgüte: Top-1 1,2 % entscheidet dort, wo die Heuristik indifferent
+ist (Gap ≈ 0), und bringt dort fast Zufall ein.
+
+**Konsequenz für die 277 Partien.** Sie würden jetzt nur noch klären, ob
+Skala 20 bei 46,7 % oder bei 50 % liegt — eine Frage ohne Handlung dahinter,
+denn `netMaxBlend` bleibt in beiden Fällen 0. Die Rechenzeit ist besser in
+Kopfgüte investiert (andere Architektur) als in die genauere Vermessung einer
+Dosis, deren bester Fall „nicht von Ausschalten zu unterscheiden" ist.
 
 **Was ein Abschluss kosten würde.** Um 41,7 % gegen 50 % mit 80 % Power zu
 belegen, braucht es ≈ 277 Partien = 138 Paare ≈ 6,1 h Rechenzeit; für 45 %
