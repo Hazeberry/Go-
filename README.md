@@ -58,6 +58,20 @@ nichts zu installieren.
   landet nie auf Rang 1. Für PUCT zählt nur der Kopf. `netMaxBlend` steht
   deshalb auf 0: das Netz lernt mit, steuert aber nicht.
 
+  Der Nachfolgeversuch, überwacht aus KataGo-Partien zu lernen
+  ([`distillation/`](distillation/)), hebt den Kopf erstmals **über**
+  Zufallsniveau — Top-1 1,2 %, Top-10 7,8 % gegen 0,28 % / 2,77 % bei Zufall —
+  und gewinnt trotzdem in keinem A/B. Mit `netScoreScale` auf dem Default 5000
+  war der Test konfundiert — bei Priors bis `p_max` 0,59 speist das Netz 100
+  bis 888 Punkte ein, gegen eine Entscheidungsspanne von 15,8 (Eröffnung) bzw.
+  160 (Mittelspiel); die Heuristik wurde ersetzt, nicht beigemischt. Mit
+  spannengleicher Skala 800 nachgemessen: 41,7 % über 60 Partien, innerhalb des
+  Zufallsbands. Drei Läufe, 30,0 % / 40,0 % / 41,7 %, **kein Gewinn** — aber
+  der Unterschied zwischen den Skalen ist mit p = 0,39 selbst nicht
+  signifikant. `netMaxBlend` bleibt 0, aus Mangel an Beleg für einen Gewinn.
+  Ob die Netzgüte der Grund ist, ist bei dieser Laufgröße **nicht**
+  entscheidbar: dafür bräuchte es ≈ 277 Partien.
+
 ## Architektur
 
 Eine Datei, drei Skriptblöcke — bewusst so, damit die Engine ohne Build-Schritt
@@ -123,6 +137,7 @@ Simulationszahl pro Zug direkt an der Rechenleistung hängt.
 | `phaseNormalize` (Experten vor dem Blend normieren) | 42,5 % über 80 Partien, p = 0,22 | verworfen — Default 0 |
 | `rolloutSample`, `evaluateMove`-Expansion, FPU-Vorzeichen | 60 %, 61 %, ±0,005 ΔQ | abgelehnt bzw. ohne Stärkeeffekt eingebaut |
 | Policy-Netz, Rang des Suchzugs | 4 von 4 Initialisierungen besser (111,7 → 90,3), Top-10 aber auf Zufallsniveau | `netMaxBlend` bleibt 0 — kein A/B, es gibt nichts zu blenden |
+| KataGo-Distillation, `netMaxBlend` 0,30 gegen 0 | drei Läufe ohne Gewinn: 30,0 % und 40,0 % bei `netScoreScale` 5000 (gepoolt p = 0,003, aber **konfundiert** — Heuristik ersetzt statt gemischt), 41,7 % bei spannengleicher Skala 800 (p = 0,33, im Zufallsband) | `netMaxBlend` bleibt 0 — kein Gewinn belegt. Skala als Ursache **nicht** belegt (Differenz p = 0,39); Abschluss bräuchte ≈ 277 Partien |
 
 Zwei der Nullergebnisse sind **gehaltvoll, nicht leer**: Bei beiden ist per
 Verhaltensmessung belegt, dass der Parameter die Zugwahl ändert — bei
