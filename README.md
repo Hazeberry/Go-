@@ -61,9 +61,10 @@ nichts zu installieren.
   Der Nachfolgeversuch, überwacht aus KataGo-Partien zu lernen
   ([`distillation/`](distillation/)), hebt den Kopf erstmals **über**
   Zufallsniveau — Top-1 1,2 %, Top-10 7,8 % gegen 0,28 % / 2,77 % bei Zufall —
-  und verliert das A/B trotzdem deutlich: 18:42 über 60 gepaarte Partien mit
-  `netMaxBlend=0,30`. Faktor 4 über Zufall reicht nicht; ein Prior, der in
-  98,8 % der Fälle nicht den Suchzug oben hat, lenkt PUCT von der Suche weg.
+  und verliert das A/B trotzdem: mit `netMaxBlend=0,30` in zwei unabhängigen
+  Läufen 30,0 % und 40,0 %, gepoolt 42:78 über 120 gepaarte Partien
+  (p = 0,003). Faktor 4 über Zufall reicht nicht; ein Prior, der in 98,8 % der
+  Fälle nicht den Suchzug oben hat, lenkt PUCT von der Suche weg.
   `netMaxBlend` bleibt 0.
 
 ## Architektur
@@ -131,7 +132,7 @@ Simulationszahl pro Zug direkt an der Rechenleistung hängt.
 | `phaseNormalize` (Experten vor dem Blend normieren) | 42,5 % über 80 Partien, p = 0,22 | verworfen — Default 0 |
 | `rolloutSample`, `evaluateMove`-Expansion, FPU-Vorzeichen | 60 %, 61 %, ±0,005 ΔQ | abgelehnt bzw. ohne Stärkeeffekt eingebaut |
 | Policy-Netz, Rang des Suchzugs | 4 von 4 Initialisierungen besser (111,7 → 90,3), Top-10 aber auf Zufallsniveau | `netMaxBlend` bleibt 0 — kein A/B, es gibt nichts zu blenden |
-| KataGo-Distillation, `netMaxBlend` 0,30 gegen 0 | 18:42 über 60 gepaarte Partien, Paar-Bilanz 3:15, p = 0,008 (Erstlauf) | verworfen — das Netz **schwächt** bei dieser Güte, `netMaxBlend` bleibt 0 |
+| KataGo-Distillation, `netMaxBlend` 0,30 gegen 0 | zwei unabhängige Läufe 30,0 % und 40,0 %, gepoolt 42:78 über 120 Partien, Paar-Bilanz 8:26, p = 0,003 | verworfen — das Netz **schwächt** bei dieser Güte, `netMaxBlend` bleibt 0 |
 
 Zwei der Nullergebnisse sind **gehaltvoll, nicht leer**: Bei beiden ist per
 Verhaltensmessung belegt, dass der Parameter die Zugwahl ändert — bei

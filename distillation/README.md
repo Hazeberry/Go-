@@ -41,14 +41,41 @@ Ein vollständiger Durchlauf, jeder Schritt einzeln geprüft:
 | 3. Daten | 61 363 Zeilen aus vier val-Shards, 3 wegen besetztem Ziel verworfen |
 | 4. Training | Verlust 5,88 → 4,08; Top-1 1,2 %, Top-10 7,8 % (Zufall 0,28 % / 2,77 %) |
 | 5. Export | max. Abweichung 2,4e-07, argmax 8/8 gleich |
-| 6. Spielstärke | **18:42** über 60 gepaarte Partien, Paar-Bilanz 3:15, p = 0,008 |
+| 6. Spielstärke | **42:78** über 120 gepaarte Partien (zwei Läufe), Paar-Bilanz 8:26, p = 0,003 |
 
-**Das Ergebnis ist negativ, und zwar deutlich.** Das Netz ist nachweislich
-besser als Zufall — Faktor 4 auf Top-1, Faktor 2,8 auf Top-10 — und macht die
-Engine mit `netMaxBlend=0,30` trotzdem schwächer, am Ende im Schnitt 15,5
-Punkte Gebiet hinten. Ein Prior, der in 98,8 % der Fälle nicht den Suchzug
-oben hat, zieht PUCT von der Suche weg, statt sie zu führen. Für einen
-Gewinn müsste die Kopfgüte um Größenordnungen steigen, nicht um Prozente.
+**Das Ergebnis ist negativ.** Das Netz ist nachweislich besser als Zufall —
+Faktor 4 auf Top-1, Faktor 2,8 auf Top-10 — und macht die Engine mit
+`netMaxBlend=0,30` trotzdem schwächer, am Ende 7 bis 16 Punkte Gebiet hinten.
+Ein Prior, der in 98,8 % der Fälle nicht den Suchzug oben hat, zieht PUCT von
+der Suche weg, statt sie zu führen. Für einen Gewinn müsste die Kopfgüte um
+Größenordnungen steigen, nicht um Prozente.
+
+Nach der Hausregel „Erstlauf ist Hypothese" stehen zwei unabhängige Läufe
+dahinter, und sie sind **nicht gleich stark**:
+
+| Lauf | Spiele A:B | Siegrate A | Paar-Bilanz | p | Sims/Zug |
+|---|---|---|---|---|---|
+| 1 (`Math.random`) | 18:42 | 30,0 % | 3:15 | 0,008 | 337 |
+| 2 (Seed 4711) | 24:36 | 40,0 % | 5:11 | 0,21 | 430 |
+| gepoolt | 42:78 | 35,0 % | 8:26 | 0,003 | — |
+
+Lauf 2 allein trägt nichts (p = 0,21). Getragen wird der Befund davon, dass
+beide Läufe auf **derselben** Seite von 50 % liegen und 35,0 % gepoolt unter
+der Untergrenze des 95-%-Zufallsbands liegt (41,1 % bei n=120). Das ist der
+Gegenfall zu `phaseNormalize` im Harness-Kopf, wo der zweite Seed auf 52,5 %
+kippte und das Poolen das Ergebnis auflöste.
+
+Nicht belegte, aber passende Lesart: Lauf 2 hatte 430 statt 337 Sims/Zug, und
+der Schaden war dort geringer (40 % gegen 30 %). Mehr Suche würde einen
+schlechten Prior überstimmen. Zwei Läufe belegen diesen Zusammenhang nicht.
+
+**`--seed` macht diese Läufe nicht reproduzierbar.** Zwei Läufe mit Seed 4711
+ergaben verschiedene Partien — der Seed fixiert die Eröffnungen, aber bei
+festem Zeitbudget (250 ms/Zug) hängt die Simulationszahl an der Maschinenlast
+und damit der Suchverlauf. Läufe mit gleichem Seed sind deshalb **keine**
+unabhängigen Stichproben (gleiche Eröffnungen) und dürfen nicht gepoolt
+werden; die beiden Läufe oben sind es, weil Lauf 1 ohne `--seed` auf
+`Math.random` läuft.
 
 Die Kette selbst ist damit **nicht** widerlegt: Schritte 1, 2 und 5 schließen
 Merkmals-, Kanal- und Exportfehler aus, und ein Auswendiglern-Test (2000
