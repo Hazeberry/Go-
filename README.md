@@ -61,16 +61,19 @@ nichts zu installieren.
   Der Nachfolgeversuch, überwacht aus KataGo-Partien zu lernen
   ([`distillation/`](distillation/)), hebt den Kopf erstmals **über**
   Zufallsniveau — Top-1 1,2 %, Top-10 7,8 % gegen 0,28 % / 2,77 % bei Zufall —
-  und gewinnt trotzdem in keinem A/B. Mit `netScoreScale` auf dem Default 5000
-  war der Test konfundiert — bei Priors bis `p_max` 0,59 speist das Netz 100
-  bis 888 Punkte ein, gegen eine Entscheidungsspanne von 15,8 (Eröffnung) bzw.
-  160 (Mittelspiel); die Heuristik wurde ersetzt, nicht beigemischt. Mit
-  spannengleicher Skala 800 nachgemessen: 41,7 % über 60 Partien, innerhalb des
-  Zufallsbands. Drei Läufe, 30,0 % / 40,0 % / 41,7 %, **kein Gewinn** — aber
-  der Unterschied zwischen den Skalen ist mit p = 0,39 selbst nicht
-  signifikant. `netMaxBlend` bleibt 0, aus Mangel an Beleg für einen Gewinn.
-  Ob die Netzgüte der Grund ist, ist bei dieser Laufgröße **nicht**
-  entscheidbar: dafür bräuchte es ≈ 277 Partien.
+  und gewinnt trotzdem in keinem A/B: 35,0 % über 120 gepaarte Partien bei
+  `netScoreScale` 5000 (p = 0,003). Diese Skala ist **gemessen** kommensurabel
+  — der Netzterm liegt bei 0,4× bis 5,6× der Entscheidungsspanne von
+  `evaluateMove`, die spannenkalibrierten Werte streuen um Median 3841. Ein
+  Gegentest mit 800 kam auf 41,7 %, schaltete das Netz dabei aber weitgehend ab
+  (0,06×–0,35×) und belegt daher keine Neutralität. `netMaxBlend` bleibt 0.
+
+  Der offene Punkt liegt woanders: der Abstand zwischen bestem und zweitbestem
+  Heuristikzug ist in Eröffnung und Mittelspiel praktisch **null** (0,0–0,5 bei
+  einer Spanne von 45–236). Die Heuristik ist an ihrer Spitze indifferent, also
+  entscheidet der Prior dort bei jeder Skala — ein Netz mit Top-1 1,2 % genau
+  dort, wo es fast Zufall einbringt. Um nur Gleichstände zu brechen, genügte
+  eine Skala von ≈ 20; alle Läufe lagen mindestens 40× darüber. **Ungetestet.**
 
 ## Architektur
 
@@ -137,7 +140,8 @@ Simulationszahl pro Zug direkt an der Rechenleistung hängt.
 | `phaseNormalize` (Experten vor dem Blend normieren) | 42,5 % über 80 Partien, p = 0,22 | verworfen — Default 0 |
 | `rolloutSample`, `evaluateMove`-Expansion, FPU-Vorzeichen | 60 %, 61 %, ±0,005 ΔQ | abgelehnt bzw. ohne Stärkeeffekt eingebaut |
 | Policy-Netz, Rang des Suchzugs | 4 von 4 Initialisierungen besser (111,7 → 90,3), Top-10 aber auf Zufallsniveau | `netMaxBlend` bleibt 0 — kein A/B, es gibt nichts zu blenden |
-| KataGo-Distillation, `netMaxBlend` 0,30 gegen 0 | drei Läufe ohne Gewinn: 30,0 % und 40,0 % bei `netScoreScale` 5000 (gepoolt p = 0,003, aber **konfundiert** — Heuristik ersetzt statt gemischt), 41,7 % bei spannengleicher Skala 800 (p = 0,33, im Zufallsband) | `netMaxBlend` bleibt 0 — kein Gewinn belegt. Skala als Ursache **nicht** belegt (Differenz p = 0,39); Abschluss bräuchte ≈ 277 Partien |
+| KataGo-Distillation, `netMaxBlend` 0,30 gegen 0 | 35,0 % über 120 Partien bei `netScoreScale` 5000, p = 0,003 — Skala gemessen kommensurabel (0,4×–5,6× der Spanne). Gegentest mit 800: 41,7 %, aber Netz dabei weitgehend abgeschaltet | `netMaxBlend` bleibt 0. Offen: Skala ≈ 20 (nur Gleichstände brechen) — die Heuristik ist an der Spitze indifferent (Gap 0,0–0,5) |
+| Entscheidungsspanne von `evaluateMove`, gemessen | Spanne zum Median 45–1206, Gap zum Zweitbesten aber 0,0–0,5 in Eröffnung und Mittelspiel | Jeder Prior kippt dort die Zugwahl, unabhängig von `netScoreScale` — Kalibrierung allein kann das nicht steuern |
 
 Zwei der Nullergebnisse sind **gehaltvoll, nicht leer**: Bei beiden ist per
 Verhaltensmessung belegt, dass der Parameter die Zugwahl ändert — bei
