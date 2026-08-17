@@ -46,9 +46,33 @@ Ein vollständiger Durchlauf, jeder Schritt einzeln geprüft:
 **Das Ergebnis ist negativ.** Das Netz ist nachweislich besser als Zufall —
 Faktor 4 auf Top-1, Faktor 2,8 auf Top-10 — und macht die Engine mit
 `netMaxBlend=0,30` trotzdem schwächer, am Ende 7 bis 16 Punkte Gebiet hinten.
-Ein Prior, der in 98,8 % der Fälle nicht den Suchzug oben hat, zieht PUCT von
-der Suche weg, statt sie zu führen. Für einen Gewinn müsste die Kopfgüte um
-Größenordnungen steigen, nicht um Prozente.
+
+**Der Lauf ist aber konfundiert, und zwar so stark, dass er die Frage nach der
+Netzgüte nicht beantwortet.** Der Netzbeitrag ist `blendWeight · p ·
+netScoreScale` (`index.html:1687`), `netScoreScale` stand auf dem Default 5000.
+Die exportierten Priors dieses Netzes sind selbstsicher — `p_max` bis 0,59 —
+und ergeben damit Beiträge von 100 bis 888 Punkten, gegen eine
+Entscheidungsspanne von `evaluateMove` von ≈ 15,8 in der Eröffnung und ≈ 160
+im Mittelspiel:
+
+| Fall | `p_max` | Beitrag bei bw 0,30 | Verhältnis zur Mittelspielspanne |
+|---|---|---|---|
+| 0 | 0,067 | 101 | 0,6× |
+| 3 | 0,131 | 196 | 1,2× |
+| 5 | 0,592 | 888 | 5,5× |
+
+Bei 0,30 wurde die Heuristik also nicht zu 30 % beigemischt, sondern ihre
+Rangfolge **ersetzt**. Gemessen wurde damit „Zugordnung des Netzes statt der
+Heuristik", nicht „Netz als Prior mit 30 % Gewicht". Dass das verliert, ist
+plausibel und belegt — es belegt aber **nicht**, dass die Kopfgüte der Grund
+ist.
+
+Der Kommentar in `index.html:691` sah dieses Problem für *flache, ungelernte*
+Priors voraus (1,4e-3 … 5,2e-3). Für ein gelerntes Netz kippt es ins
+Gegenteil: je sicherer der Prior, desto vollständiger die Übersteuerung. Ein
+fairer Test braucht ein `netScoreScale`, das den Netzterm spannengleich macht
+— rechnerisch ≈ 89 für die Eröffnung und ≈ 901 für das Mittelspiel, gegen
+den Default 5000, also 56× bzw. 6× zu groß. **Dieser Test ist offen.**
 
 Nach der Hausregel „Erstlauf ist Hypothese" stehen zwei unabhängige Läufe
 dahinter, und sie sind **nicht gleich stark**:

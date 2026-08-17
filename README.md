@@ -63,9 +63,12 @@ nichts zu installieren.
   Zufallsniveau — Top-1 1,2 %, Top-10 7,8 % gegen 0,28 % / 2,77 % bei Zufall —
   und verliert das A/B trotzdem: mit `netMaxBlend=0,30` in zwei unabhängigen
   Läufen 30,0 % und 40,0 %, gepoolt 42:78 über 120 gepaarte Partien
-  (p = 0,003). Faktor 4 über Zufall reicht nicht; ein Prior, der in 98,8 % der
-  Fälle nicht den Suchzug oben hat, lenkt PUCT von der Suche weg.
-  `netMaxBlend` bleibt 0.
+  (p = 0,003). Der Lauf ist aber **konfundiert**: bei `netScoreScale` 5000 und
+  Priors bis `p_max` 0,59 speist das Netz 100 bis 888 Punkte ein, gegen eine
+  Entscheidungsspanne von 15,8 (Eröffnung) bzw. 160 (Mittelspiel). Bei 0,30
+  wurde die Heuristik nicht beigemischt, sondern ersetzt. `netMaxBlend` bleibt
+  0 — ein Gewinn ist nicht belegt; ob die Netzgüte der Grund ist, ist damit
+  aber **nicht** entschieden.
 
 ## Architektur
 
@@ -132,7 +135,7 @@ Simulationszahl pro Zug direkt an der Rechenleistung hängt.
 | `phaseNormalize` (Experten vor dem Blend normieren) | 42,5 % über 80 Partien, p = 0,22 | verworfen — Default 0 |
 | `rolloutSample`, `evaluateMove`-Expansion, FPU-Vorzeichen | 60 %, 61 %, ±0,005 ΔQ | abgelehnt bzw. ohne Stärkeeffekt eingebaut |
 | Policy-Netz, Rang des Suchzugs | 4 von 4 Initialisierungen besser (111,7 → 90,3), Top-10 aber auf Zufallsniveau | `netMaxBlend` bleibt 0 — kein A/B, es gibt nichts zu blenden |
-| KataGo-Distillation, `netMaxBlend` 0,30 gegen 0 | zwei unabhängige Läufe 30,0 % und 40,0 %, gepoolt 42:78 über 120 Partien, Paar-Bilanz 8:26, p = 0,003 | verworfen — das Netz **schwächt** bei dieser Güte, `netMaxBlend` bleibt 0 |
+| KataGo-Distillation, `netMaxBlend` 0,30 gegen 0 | zwei unabhängige Läufe 30,0 % und 40,0 %, gepoolt 42:78 über 120 Partien, Paar-Bilanz 8:26, p = 0,003 — **konfundiert**, `netScoreScale` 5000 ersetzt die Heuristik statt sie zu mischen | `netMaxBlend` bleibt 0; Netzgüte als Ursache **nicht** belegt, Test mit kalibriertem `netScoreScale` offen |
 
 Zwei der Nullergebnisse sind **gehaltvoll, nicht leer**: Bei beiden ist per
 Verhaltensmessung belegt, dass der Parameter die Zugwahl ändert — bei
