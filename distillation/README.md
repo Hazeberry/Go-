@@ -41,7 +41,7 @@ Ein vollständiger Durchlauf, jeder Schritt einzeln geprüft:
 | 3. Daten | 61 363 Zeilen aus vier val-Shards, 3 wegen besetztem Ziel verworfen |
 | 4. Training | Verlust 5,88 → 4,08; Top-1 1,2 %, Top-10 7,8 % (Zufall 0,28 % / 2,77 %) |
 | 5. Export | max. Abweichung 2,4e-07, argmax 8/8 gleich |
-| 6. Spielstärke | **42:78** über 120 gepaarte Partien (zwei Läufe), Paar-Bilanz 8:26, p = 0,003 |
+| 6. Spielstärke | kein Gewinn in drei Läufen: 30,0 %, 40,0 % (Skala 5000) und 41,7 % (Skala 800) |
 
 **Das Ergebnis ist negativ.** Das Netz ist nachweislich besser als Zufall —
 Faktor 4 auf Top-1, Faktor 2,8 auf Top-10 — und macht die Engine mit
@@ -70,9 +70,37 @@ ist.
 Der Kommentar in `index.html:691` sah dieses Problem für *flache, ungelernte*
 Priors voraus (1,4e-3 … 5,2e-3). Für ein gelerntes Netz kippt es ins
 Gegenteil: je sicherer der Prior, desto vollständiger die Übersteuerung. Ein
-fairer Test braucht ein `netScoreScale`, das den Netzterm spannengleich macht
-— rechnerisch ≈ 89 für die Eröffnung und ≈ 901 für das Mittelspiel, gegen
-den Default 5000, also 56× bzw. 6× zu groß. **Dieser Test ist offen.**
+fairer Test braucht ein `netScoreScale`, das den Netzterm spannengleich macht.
+Pro Testbrett mit der phasenrichtigen Spanne gerechnet ergibt das 402 bis
+1727, Median 775 — der Bereich ist eng, weil Netzsicherheit (`p_max` 0,07 →
+0,59) und Heuristikspanne (15,8 → 160) beide mit dem Partieverlauf wachsen und
+sich weitgehend aufheben. Gewählt: 800, Mitte statt Extrem.
+
+### Der kalibrierte Lauf — und warum er die Frage nicht schließt
+
+| Konfiguration | Spiele A:B | Siegrate A | Paar-Bilanz | p | im 95-%-Band? |
+|---|---|---|---|---|---|
+| `netScoreScale` 5000 (2 Läufe) | 42:78 | 35,0 % | 8:26 | 0,003 | **nein**, darunter |
+| `netScoreScale` 800 | 25:35 | 41,7 % | 6:11 | 0,332 | ja (37,3–62,7 %) |
+
+Die Kalibrierung nimmt dem Befund die Signifikanz, aber sie dreht ihn nicht:
+41,7 % ist kein Gewinn. Und der Unterschied zwischen beiden Konfigurationen
+ist **+6,7 Prozentpunkte bei p = 0,39** — selbst nicht signifikant. Es ist
+also *nicht* belegt, dass die Skala die Ursache war; belegt ist nur, dass der
+spannengleiche Lauf nicht mehr messbar schlechter als 50 % ist.
+
+Damit stehen beide Hypothesen weiter: „Netz zu schwach" und „Skala war schuld"
+sind bei n=60 nicht zu trennen. Was über alle drei Läufe hinweg gilt: 30,0 %,
+40,0 %, 41,7 % — **kein Lauf zeigt einen Gewinn**, in keiner Konfiguration.
+`netMaxBlend` bleibt 0, und zwar aus Mangel an Beleg für einen Gewinn, nicht
+mehr aus belegtem Schaden.
+
+**Was ein Abschluss kosten würde.** Um 41,7 % gegen 50 % mit 80 % Power zu
+belegen, braucht es ≈ 277 Partien = 138 Paare ≈ 6,1 h Rechenzeit; für 45 %
+wären es 776 Partien ≈ 17 h. Der Effekt, wenn es einen gibt, liegt unter dem
+Rauschboden dieser Laufgröße. Wer die Frage schließen will, muss diese
+Partienzahl einplanen — oder die Kopfgüte so weit heben, dass der Effekt
+größer wird als das Rauschen.
 
 Nach der Hausregel „Erstlauf ist Hypothese" stehen zwei unabhängige Läufe
 dahinter, und sie sind **nicht gleich stark**:
