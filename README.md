@@ -155,6 +155,44 @@ Engine spielt also nachweislich anders und gewinnt dadurch nicht.
 Die vollständigen Zahlen samt Vorbehalten stehen im Kopfkommentar von
 [`ab-harness.js`](ab-harness.js).
 
+### Gemessen heißt nicht wirksam: gespeicherte Parameter überschreiben jeden Default
+
+Ein exportierter Spielstand vom 18.08.2026 (Zug 204, Stufe „hard") zeigt die
+Grenze dieser ganzen Messreihe. Die Partie lief mit:
+
+| Parameter | Default im Repo | im Spiel | Messlage |
+|---|---|---|---|
+| `mctsValueScale` | 200 | **350** | 200 schlägt 350 mit 65:35, p = 0,0035 (≈ +108 Elo) |
+| `netMaxBlend` | 0,00 | **0,3** | 0,3 verliert mit 35 % über 120 Partien, p = 0,003 |
+| `resignQ` | 0,95 | **0,9** | — |
+
+Beide belegten Verschlechterungen waren gleichzeitig aktiv. Die KI spielte
+also gegen zwei selbst gemessene Handicaps, und keine Analyse ihres
+Zugverhaltens ist ohne diesen Hinweis interpretierbar.
+
+**Der Mechanismus ist strukturell, kein Bedienfehler.** `dashSave` legt mit
+`JSON.stringify(PARAMS)` den **vollständigen** Parametersatz unter
+`localStorage['go_params']` ab (`index.html:3669`), und beim Start übernimmt
+`dashLoadSaved` **jeden** Schlüssel daraus, der in `PARAMS_DEFAULT` vorkommt
+und eine endliche Zahl ist (`index.html:3689`). Der Speichern-Knopf ist dabei
+völlig legitim bedient — die Semantik dahinter ist das Problem: gespeichert
+wird nicht „was ich geändert habe", sondern „der gesamte Stand von damals".
+Wer einmal
+gespeichert hat, friert alle Defaults ein — jede spätere Messung erreicht
+diesen Browser nie, ohne Versionsstempel und ohne sichtbare Warnung.
+
+Naheliegende Abhilfe, ungetestet: nur Abweichungen sichern
+(`PARAMS[k] !== PARAMS_DEFAULT[k]`), dann wandern neue Defaults automatisch
+mit und bewusste Abweichungen bleiben trotzdem erhalten. Bis dahin gilt:
+`dashReset` (`index.html:3697`) löscht den Speicher und stellt die gemessenen
+Werte wieder her.
+
+**Fürs Auswerten von Spielständen:** `reproduktion.board` ist die Stellung
+**vor** dem letzten KI-Zug — es ist die Eingabe, mit der die KI gerechnet hat
+(`mc`, `lastMove` und `aiColor` passen dazu). `meta.zug` und die ASCII-Anzeige
+`brett` zeigen dagegen die Stellung danach. Beide sind korrekt, aber sie
+liegen einen Zug auseinander.
+
 ## Methodik
 
 Drei Regeln, die aus Fehlern in diesem Projekt entstanden sind und im
