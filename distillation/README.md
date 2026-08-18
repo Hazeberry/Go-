@@ -41,66 +41,132 @@ Ein vollständiger Durchlauf, jeder Schritt einzeln geprüft:
 | 3. Daten | 61 363 Zeilen aus vier val-Shards, 3 wegen besetztem Ziel verworfen |
 | 4. Training | Verlust 5,88 → 4,08; Top-1 1,2 %, Top-10 7,8 % (Zufall 0,28 % / 2,77 %) |
 | 5. Export | max. Abweichung 2,4e-07, argmax 8/8 gleich |
-| 6. Spielstärke | kein Gewinn in drei Läufen: 30,0 %, 40,0 % (Skala 5000) und 41,7 % (Skala 800) |
+| 6. Spielstärke | kein Gewinn bei vier Läufen über 250-fache Skalenspanne: 35,0 % (5000), 41,7 % (800), 46,7 % (20→1000) |
 
 **Das Ergebnis ist negativ.** Das Netz ist nachweislich besser als Zufall —
 Faktor 4 auf Top-1, Faktor 2,8 auf Top-10 — und macht die Engine mit
 `netMaxBlend=0,30` trotzdem schwächer, am Ende 7 bis 16 Punkte Gebiet hinten.
 
-**Der Lauf ist aber konfundiert, und zwar so stark, dass er die Frage nach der
-Netzgüte nicht beantwortet.** Der Netzbeitrag ist `blendWeight · p ·
-netScoreScale` (`index.html:1687`), `netScoreScale` stand auf dem Default 5000.
-Die exportierten Priors dieses Netzes sind selbstsicher — `p_max` bis 0,59 —
-und ergeben damit Beiträge von 100 bis 888 Punkten, gegen eine
-Entscheidungsspanne von `evaluateMove` von ≈ 15,8 in der Eröffnung und ≈ 160
-im Mittelspiel:
+### Skala: die Spanne ist jetzt gemessen, nicht geerbt
 
-| Fall | `p_max` | Beitrag bei bw 0,30 | Verhältnis zur Mittelspielspanne |
-|---|---|---|---|
-| 0 | 0,067 | 101 | 0,6× |
-| 3 | 0,131 | 196 | 1,2× |
-| 5 | 0,592 | 888 | 5,5× |
+Der Netzbeitrag ist `blendWeight · p · netScoreScale` (`index.html:1687`).
+Wie stark er wirkt, hängt an der Entscheidungsspanne von `evaluateMove` — und
+die war hier zunächst **falsch angenommen**. Der Kommentar in `index.html:693`
+nennt ≈ 15,8 für die Eröffnung und ≈ 160 für das Mittelspiel; daraus wurde eine
+Konfundierung abgeleitet („die Skala 5000 ersetzt die Heuristik statt sie zu
+mischen") und ein Gegentest mit Skala 800 gefahren. **Beides war falsch
+begründet.** Die Phasengrenze liegt bei mc ≈ 15–20 (`ab-harness.js:421`), nicht
+bei 150 — die Zuordnung der Spannen zu den Testbrettern stimmte also nicht.
 
-Bei 0,30 wurde die Heuristik also nicht zu 30 % beigemischt, sondern ihre
-Rangfolge **ersetzt**. Gemessen wurde damit „Zugordnung des Netzes statt der
-Heuristik", nicht „Netz als Prior mit 30 % Gewicht". Dass das verliert, ist
-plausibel und belegt — es belegt aber **nicht**, dass die Kopfgüte der Grund
-ist.
+Direkt gemessen (`evaluateMove` über alle legalen Züge der acht Testbretter,
+mit dem echten `mc`):
 
-Der Kommentar in `index.html:691` sah dieses Problem für *flache, ungelernte*
-Priors voraus (1,4e-3 … 5,2e-3). Für ein gelerntes Netz kippt es ins
-Gegenteil: je sicherer der Prior, desto vollständiger die Übersteuerung. Ein
-fairer Test braucht ein `netScoreScale`, das den Netzterm spannengleich macht.
-Pro Testbrett mit der phasenrichtigen Spanne gerechnet ergibt das 402 bis
-1727, Median 775 — der Bereich ist eng, weil Netzsicherheit (`p_max` 0,07 →
-0,59) und Heuristikspanne (15,8 → 160) beide mit dem Partieverlauf wachsen und
-sich weitgehend aufheben. Gewählt: 800, Mitte statt Extrem.
-
-### Der kalibrierte Lauf — und warum er die Frage nicht schließt
-
-| Konfiguration | Spiele A:B | Siegrate A | Paar-Bilanz | p | im 95-%-Band? |
+| mc | Spanne (max−median) | Gap (max−2.) | Netzterm bei Skala 5000 | Verhältnis | kalibrierte Skala |
 |---|---|---|---|---|---|
-| `netScoreScale` 5000 (2 Läufe) | 42:78 | 35,0 % | 8:26 | 0,003 | **nein**, darunter |
-| `netScoreScale` 800 | 25:35 | 41,7 % | 6:11 | 0,332 | ja (37,3–62,7 %) |
+| 0 | 45,9 | 0,0 | 101 | 2,2× | 2281 |
+| 5 | 45,3 | 0,5 | 126 | 2,8× | 1793 |
+| 30 | 148,8 | 0,4 | 103 | 0,7× | 7201 |
+| 60 | 235,8 | 8,3 | 196 | 0,8× | 6004 |
+| 120 | 158,1 | 0,2 | 172 | 1,1× | 4602 |
+| 200 | 158,2 | 0,0 | 888 | 5,6× | 891 |
+| 280 | 471,9 | 155,8 | 766 | 1,6× | 3080 |
+| 330 | 1206,0 | 424,2 | 463 | 0,4× | 13021 |
 
-Die Kalibrierung nimmt dem Befund die Signifikanz, aber sie dreht ihn nicht:
-41,7 % ist kein Gewinn. Und der Unterschied zwischen beiden Konfigurationen
-ist **+6,7 Prozentpunkte bei p = 0,39** — selbst nicht signifikant. Es ist
-also *nicht* belegt, dass die Skala die Ursache war; belegt ist nur, dass der
-spannengleiche Lauf nicht mehr messbar schlechter als 50 % ist.
+Damit fällt die Konfundierungs-These. Bei Skala 5000 liegt der Netzterm
+zwischen **0,4× und 5,6×** der Spanne, also kommensurabel — nicht beim 6- bis
+56-fachen. Die spannenkalibrierten Werte streuen von 891 bis 13021 mit Median
+**3841**; der Default 5000 liegt nahe dieser Mitte. Die Skala 800 war folglich
+keine Korrektur, sondern **5× zu klein**: dort sinkt das Verhältnis auf
+0,06×–0,35×, das Netz war weitgehend abgeschaltet.
 
-Damit stehen beide Hypothesen weiter: „Netz zu schwach" und „Skala war schuld"
-sind bei n=60 nicht zu trennen. Was über alle drei Läufe hinweg gilt: 30,0 %,
-40,0 %, 41,7 % — **kein Lauf zeigt einen Gewinn**, in keiner Konfiguration.
-`netMaxBlend` bleibt 0, und zwar aus Mangel an Beleg für einen Gewinn, nicht
-mehr aus belegtem Schaden.
+### Drei Läufe, und wie sie nach der Messung zu lesen sind
 
-**Was ein Abschluss kosten würde.** Um 41,7 % gegen 50 % mit 80 % Power zu
-belegen, braucht es ≈ 277 Partien = 138 Paare ≈ 6,1 h Rechenzeit; für 45 %
-wären es 776 Partien ≈ 17 h. Der Effekt, wenn es einen gibt, liegt unter dem
-Rauschboden dieser Laufgröße. Wer die Frage schließen will, muss diese
-Partienzahl einplanen — oder die Kopfgüte so weit heben, dass der Effekt
-größer wird als das Rauschen.
+| Konfiguration | Spiele A:B | Siegrate A | Paar-Bilanz | p | Netz wirksam? |
+|---|---|---|---|---|---|
+| `netScoreScale` 5000 (2 Läufe) | 42:78 | 35,0 % | 8:26 | 0,003 | ja, kommensurabel |
+| `netScoreScale` 800 | 25:35 | 41,7 % | 6:11 | 0,332 | überwiegend nein |
+
+Der 800er-Lauf ist damit **kein** Beleg für Neutralität. Ein Lauf, der gegen
+50 % driftet, weil A ≈ B wird, misst nur, dass der Parameter nichts mehr tut.
+Der belastbare Befund bleibt der erste: bei kommensurabler Skala verliert das
+Netz mit 35 % (p = 0,003). `netMaxBlend` bleibt 0.
+
+### Der eigentliche Fund: die Heuristik ist an der Spitze indifferent
+
+Die Gap-Spalte ist das Interessante. Der Abstand zwischen bestem und
+zweitbestem Heuristikzug ist in Eröffnung und Mittelspiel praktisch **null**
+(0,0 / 0,5 / 0,4 / 0,2 / 0,0), während die Spanne zum Median bei 45 bis 236
+liegt. Die Heuristik hat also eine breite Rangfolge, ist aber an ihrer Spitze
+unentschieden.
+
+Folge: der Prior entscheidet die Zugwahl dort bei **jeder** Skala — er muss nur
+einen Bruchteil eines Punktes beitragen, um die Reihenfolge der Top-Züge zu
+kippen. Deshalb zählte der Harness auch im 800er-Lauf noch 9394 von 19384
+Vorwärtsläufen als „mit Wirkung auf die Zugwahl". Ein Netz mit Top-1 1,2 %
+entscheidet damit genau dort, wo die Heuristik keine Meinung hat — und was es
+dort einbringt, ist fast Zufall.
+
+Die untere Kante ist rechnerisch klar: um nur Gleichstände zu brechen, ohne
+echte Heuristikunterschiede zu überschreiben, genügt eine Skala von **≈ 20**
+(Gap-Spalte), ab dem Endspiel steigend auf ≈ 1000–4600.
+
+### Die Dosis-Wirkungs-Kurve — damit ist Kalibrierung erschöpft
+
+Genau diese Gap-kalibrierte Stufe wurde gefahren: `netScoreScale=20`,
+ab Zug 250 auf 1000. Der Phasenwechsel griff 55-mal, die Stufe war also
+wirksam.
+
+| Skala | Spiele A:B | Siegrate A | Paar-Bilanz | p | Gebiet am Ende (A) |
+|---|---|---|---|---|---|
+| 5000 (2 Läufe) | 42:78 | 35,0 % | 8:26 | 0,003 | −7 bis −16 |
+| 800 | 25:35 | 41,7 % | 6:11 | 0,332 | −9,4 |
+| 20 → 1000 ab Zug 250 | 28:32 | 46,7 % | 8:10 | 0,815 | −0,7 |
+
+**Die Kurve ist monoton und läuft von unten gegen 50 %.** Je kleiner der
+Netzeinfluss, desto näher am Break-even — und der Grenzwert bei Dosis 0 ist
+definitionsgemäß 50 %, weil A dann zu B wird.
+
+Das ist der Schluss des Kapitels: **wäre die Skala nur falsch eingestellt,
+müsste irgendeine Zwischendosis über 50 % schießen.** Über eine
+250-fache Spannweite (20 bis 5000) tut es keine. Das beste Ergebnis ist
+dasjenige, bei dem das Netz fast nichts tut. Ein Prior mit nutzbarem Signal
+verhält sich nicht so; ein Prior ohne nutzbares Signal genau so — Schaden
+proportional zur Dosis, kein Optimum dazwischen.
+
+Kalibrierung ist damit als Erklärung **erschöpft**, nicht offen. Der Engpass
+ist die Kopfgüte: Top-1 1,2 % entscheidet dort, wo die Heuristik indifferent
+ist (Gap ≈ 0), und bringt dort fast Zufall ein.
+
+**Konsequenz für die 277 Partien.** Sie würden jetzt nur noch klären, ob
+Skala 20 bei 46,7 % oder bei 50 % liegt — eine Frage ohne Handlung dahinter,
+denn `netMaxBlend` bleibt in beiden Fällen 0. Die Rechenzeit ist besser in
+Kopfgüte investiert (andere Architektur) als in die genauere Vermessung einer
+Dosis, deren bester Fall „nicht von Ausschalten zu unterscheiden" ist.
+
+**Warum die 277 Partien entfallen — und zwar nicht aus Kostengründen.**
+Rein statistisch wären sie nötig: 41,7 % gegen 50 % mit 80 % Power braucht
+≈ 277 Partien = 138 Paare ≈ 6,1 h, für 45 % wären es 776 Partien ≈ 17 h.
+
+Entscheidend ist aber, **welche Frage** sie beantworten sollten. Aus
+Siegquoten lässt sich die **Kurvenform** rekonstruieren — steigt sie noch,
+oder liegt der Peak schon dahinter? Genau dafür wurde bei `mctsValueScale`
+über sieben Skalenpunkte gemessen (Plateau 150–250, `ab-harness.js:233`), und
+genau dafür braucht man viele Partien, weil Form aus verrauschten Quoten
+zusammengesetzt werden muss.
+
+Diese Frage ist hier nicht mehr offen, weil der tragende Befund **keine
+Siegquote** ist. Der Gap von 0,0–0,5 kommt aus einer direkten Messung der
+`evaluateMove`-Scores an der Entscheidungsgrenze (`spanne_check.js`) — er ist
+strukturell, nicht statistisch, und wird durch mehr Partien nicht sicherer.
+Dieselbe Art von Beleg wie bei `scoreWeight`, das die Summe der Blend-Gewichte
+„unbemerkt von 1 abweichen" ließ (`index.html:3631`): auch das wurde durch
+Hinsehen im Code entschieden, nicht durch Partien.
+
+Die Begründung ist damit von „Kurvenform, die mehr Daten braucht" auf
+„Mechanismus, der bereits feststeht" gewechselt. Der Lauf entfällt nicht,
+weil er sich nicht lohnt, sondern weil seine Frage beantwortet ist. Wer die
+Sache weiterbringen will, hebt die Kopfgüte — das ändert den Mechanismus,
+nicht nur die Fehlerbalken um ihn herum.
 
 Nach der Hausregel „Erstlauf ist Hypothese" stehen zwei unabhängige Läufe
 dahinter, und sie sind **nicht gleich stark**:

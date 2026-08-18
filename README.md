@@ -61,16 +61,23 @@ nichts zu installieren.
   Der Nachfolgeversuch, überwacht aus KataGo-Partien zu lernen
   ([`distillation/`](distillation/)), hebt den Kopf erstmals **über**
   Zufallsniveau — Top-1 1,2 %, Top-10 7,8 % gegen 0,28 % / 2,77 % bei Zufall —
-  und gewinnt trotzdem in keinem A/B. Mit `netScoreScale` auf dem Default 5000
-  war der Test konfundiert — bei Priors bis `p_max` 0,59 speist das Netz 100
-  bis 888 Punkte ein, gegen eine Entscheidungsspanne von 15,8 (Eröffnung) bzw.
-  160 (Mittelspiel); die Heuristik wurde ersetzt, nicht beigemischt. Mit
-  spannengleicher Skala 800 nachgemessen: 41,7 % über 60 Partien, innerhalb des
-  Zufallsbands. Drei Läufe, 30,0 % / 40,0 % / 41,7 %, **kein Gewinn** — aber
-  der Unterschied zwischen den Skalen ist mit p = 0,39 selbst nicht
-  signifikant. `netMaxBlend` bleibt 0, aus Mangel an Beleg für einen Gewinn.
-  Ob die Netzgüte der Grund ist, ist bei dieser Laufgröße **nicht**
-  entscheidbar: dafür bräuchte es ≈ 277 Partien.
+  und gewinnt trotzdem in keinem A/B: 35,0 % über 120 gepaarte Partien bei
+  `netScoreScale` 5000 (p = 0,003). Diese Skala ist **gemessen** kommensurabel
+  — der Netzterm liegt bei 0,4× bis 5,6× der Entscheidungsspanne von
+  `evaluateMove`, die spannenkalibrierten Werte streuen um Median 3841. Ein
+  Gegentest mit 800 kam auf 41,7 %, schaltete das Netz dabei aber weitgehend ab
+  (0,06×–0,35×) und belegt daher keine Neutralität. `netMaxBlend` bleibt 0.
+
+  Kalibrierung ist als Erklärung **erschöpft**. Über eine 250-fache
+  Skalenspanne ergibt sich eine monotone Dosis-Wirkungs-Kurve, die von unten
+  gegen 50 % läuft: 35,0 % (Skala 5000), 41,7 % (800), 46,7 % (20, ab Zug 250
+  auf 1000). Wäre die Skala nur falsch eingestellt, müsste eine Zwischendosis
+  über 50 % schießen — keine tut es, und das beste Ergebnis ist dasjenige, bei
+  dem das Netz fast nichts tut. Der Engpass ist die Kopfgüte: der Abstand
+  zwischen bestem und zweitbestem Heuristikzug ist in Eröffnung und Mittelspiel
+  praktisch null (Gap 0,0–0,5 bei einer Spanne von 45–236), dort entscheidet
+  der Prior bei jeder Skala — und ein Netz mit Top-1 1,2 % bringt dort fast
+  Zufall ein.
 
 ## Architektur
 
@@ -137,7 +144,8 @@ Simulationszahl pro Zug direkt an der Rechenleistung hängt.
 | `phaseNormalize` (Experten vor dem Blend normieren) | 42,5 % über 80 Partien, p = 0,22 | verworfen — Default 0 |
 | `rolloutSample`, `evaluateMove`-Expansion, FPU-Vorzeichen | 60 %, 61 %, ±0,005 ΔQ | abgelehnt bzw. ohne Stärkeeffekt eingebaut |
 | Policy-Netz, Rang des Suchzugs | 4 von 4 Initialisierungen besser (111,7 → 90,3), Top-10 aber auf Zufallsniveau | `netMaxBlend` bleibt 0 — kein A/B, es gibt nichts zu blenden |
-| KataGo-Distillation, `netMaxBlend` 0,30 gegen 0 | drei Läufe ohne Gewinn: 30,0 % und 40,0 % bei `netScoreScale` 5000 (gepoolt p = 0,003, aber **konfundiert** — Heuristik ersetzt statt gemischt), 41,7 % bei spannengleicher Skala 800 (p = 0,33, im Zufallsband) | `netMaxBlend` bleibt 0 — kein Gewinn belegt. Skala als Ursache **nicht** belegt (Differenz p = 0,39); Abschluss bräuchte ≈ 277 Partien |
+| KataGo-Distillation, `netMaxBlend` 0,30 gegen 0 | vier Läufe über 250-fache Skalenspanne, monoton von unten gegen 50 %: 35,0 % (5000, p = 0,003), 41,7 % (800), 46,7 % (20→1000, p = 0,82) | verworfen — `netMaxBlend` bleibt 0. Keine Dosis über 50 %, also **kein** Kalibrierungsproblem; Engpass ist die Kopfgüte |
+| Entscheidungsspanne von `evaluateMove`, gemessen | Spanne zum Median 45–1206, Gap zum Zweitbesten aber 0,0–0,5 in Eröffnung und Mittelspiel | Jeder Prior kippt dort die Zugwahl, unabhängig von `netScoreScale` — Kalibrierung allein kann das nicht steuern |
 
 Zwei der Nullergebnisse sind **gehaltvoll, nicht leer**: Bei beiden ist per
 Verhaltensmessung belegt, dass der Parameter die Zugwahl ändert — bei
@@ -146,6 +154,44 @@ Engine spielt also nachweislich anders und gewinnt dadurch nicht.
 
 Die vollständigen Zahlen samt Vorbehalten stehen im Kopfkommentar von
 [`ab-harness.js`](ab-harness.js).
+
+### Gemessen heißt nicht wirksam: gespeicherte Parameter überschreiben jeden Default
+
+Ein exportierter Spielstand vom 18.08.2026 (Zug 204, Stufe „hard") zeigt die
+Grenze dieser ganzen Messreihe. Die Partie lief mit:
+
+| Parameter | Default im Repo | im Spiel | Messlage |
+|---|---|---|---|
+| `mctsValueScale` | 200 | **350** | 200 schlägt 350 mit 65:35, p = 0,0035 (≈ +108 Elo) |
+| `netMaxBlend` | 0,00 | **0,3** | 0,3 verliert mit 35 % über 120 Partien, p = 0,003 |
+| `resignQ` | 0,95 | **0,9** | — |
+
+Beide belegten Verschlechterungen waren gleichzeitig aktiv. Die KI spielte
+also gegen zwei selbst gemessene Handicaps, und keine Analyse ihres
+Zugverhaltens ist ohne diesen Hinweis interpretierbar.
+
+**Der Mechanismus ist strukturell, kein Bedienfehler.** `dashSave` legt mit
+`JSON.stringify(PARAMS)` den **vollständigen** Parametersatz unter
+`localStorage['go_params']` ab (`index.html:3669`), und beim Start übernimmt
+`dashLoadSaved` **jeden** Schlüssel daraus, der in `PARAMS_DEFAULT` vorkommt
+und eine endliche Zahl ist (`index.html:3689`). Der Speichern-Knopf ist dabei
+völlig legitim bedient — die Semantik dahinter ist das Problem: gespeichert
+wird nicht „was ich geändert habe", sondern „der gesamte Stand von damals".
+Wer einmal
+gespeichert hat, friert alle Defaults ein — jede spätere Messung erreicht
+diesen Browser nie, ohne Versionsstempel und ohne sichtbare Warnung.
+
+Naheliegende Abhilfe, ungetestet: nur Abweichungen sichern
+(`PARAMS[k] !== PARAMS_DEFAULT[k]`), dann wandern neue Defaults automatisch
+mit und bewusste Abweichungen bleiben trotzdem erhalten. Bis dahin gilt:
+`dashReset` (`index.html:3697`) löscht den Speicher und stellt die gemessenen
+Werte wieder her.
+
+**Fürs Auswerten von Spielständen:** `reproduktion.board` ist die Stellung
+**vor** dem letzten KI-Zug — es ist die Eingabe, mit der die KI gerechnet hat
+(`mc`, `lastMove` und `aiColor` passen dazu). `meta.zug` und die ASCII-Anzeige
+`brett` zeigen dagegen die Stellung danach. Beide sind korrekt, aber sie
+liegen einen Zug auseinander.
 
 ## Methodik
 

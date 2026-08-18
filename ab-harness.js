@@ -82,6 +82,12 @@
                                   die Kennzahl, die den Einbruch
                                   lokalisiert (Fund v1: Schwarz
                                   bricht bei ~60–70 % weg).
+     dauerMin                     Partiedauer. Der konfig-Block trägt
+                                  gestartetUtc, lauf (GITHUB_RUN_NUMBER),
+                                  commit (GITHUB_SHA), Gesamtdauer und
+                                  abgeschlossen — das JSON wird nach jeder
+                                  Partie neu geschrieben, Teildaten eines
+                                  abgebrochenen Laufs bleiben erhalten.
 
    Beispiele:
      node ab-harness.js --games 20 --budget 250 --seed 2026 \
@@ -477,6 +483,40 @@
    Daraus eine Empfehlung fuer kuenftige Erstlaeufe: ZWEI Seeds
    PARALLEL statt eines laengeren Laufs. Gleiche Wanduhrzeit, aber
    ein Fehlalarm faellt sofort auf statt erst im Bestaetigungslauf.
+
+   DASSELBE GILT FUER LAUFZEIT-VERGLEICHE, und dort faellt es leichter
+   herein. Beim inkrementellen JSON-Schreiben stand der Verdacht im
+   Raum, es koste Sims/Zug — die Rohzahlen sahen sogar nach dem
+   Gegenteil aus (65-70 vorher, 75-77 nachher). ALTERNIEREND gemessen,
+   6 Runden je Version, gleiche Konfiguration und Seed, --budget 50:
+     Original  90 78 88 85 88 84  -> Mittel 85.2, SD 4.4
+     mit Patch 92 81 91 83 86 84  -> Mittel 86.1, SD 4.3
+     gepaart   +0.92 Sims/Zug (+1.1 %), SD 2.29, t = 0.98 bei n = 6
+   Kein Effekt. Entscheidend ist nicht der Mittelwert, sondern die
+   Streuung: allein die UNVERAENDERTE Version schwankt zwischen 78 und
+   90 Sims. Die vermutete Differenz von ~9 liegt vollstaendig darin.
+   Zwei Warnzeichen, an denen so etwas frueh auffaellt: (1) die
+   Richtung — eine Aenderung, die nur Arbeit HINZUFUEGT, kann nicht
+   schneller machen; wer sie schneller misst, misst etwas anderes,
+   meist die CPU-Erwaermung des zuerst gelaufenen Blocks. (2) der
+   fehlende Mechanismus — das writeFileSync liegt ZWISCHEN den
+   Partien, nie waehrend der Suche, und kostet bei 30 Paaren (~65 KB)
+   2.9 ms gegen ~150000 ms Partiedauer, also 0.002 %.
+   REGEL: Laufzeit-Vergleiche zweier Codestaende NIE blockweise, immer
+   alternierend — sonst misst man den Runner, nicht den Code.
+
+   UND DIE UMKEHRUNG, die Partien SPART: nicht jede Frage ist
+   statistisch. Aus Siegquoten muss man Kurvenform rekonstruieren —
+   steigt sie noch, oder liegt der Peak dahinter? Dafuer braucht es
+   viele Partien, siehe die sieben Skalenpunkte fuer mctsValueScale
+   oben. Eine STRUKTURELLE Aussage dagegen wird durch mehr Partien
+   nicht sicherer: dass scoreWeight die Summe der Blend-Gewichte von 1
+   abweichen liess (index.html:3631), wurde im Code entschieden; dass
+   der Abstand zwischen bestem und zweitbestem evaluateMove-Score in
+   Eroeffnung und Mittelspiel bei 0.0-0.5 liegt, ebenso
+   (distillation/spanne_check.js). Vor jedem langen Lauf lohnt daher
+   die Frage, ob die offene Groesse eine Quote oder ein Mechanismus
+   ist — im zweiten Fall ersetzt Hinsehen das Spielen.
    Nicht belegte, aber passende Lesart: Der Schalter schiebt den
    Kipppunkt von 16 auf 22, ueber den nominellen Punkt hinaus. Ist
    die fruehe Uebergabe an den taktischen Experten gut, waere
@@ -1167,6 +1207,29 @@ const driver = `
 
   const raw = {partien: [], paare: []};
 
+  /* Lauf-Identität und Startzeit gehören IN die Rohdaten, nicht nur in
+     runner-runN.txt — sonst lassen sich Artefakte vieler Läufe nicht
+     strukturiert verknüpfen, sondern nur per Regex über Freitext. Und das
+     JSON wird nach JEDER Partie neu geschrieben: stirbt der Lauf (Timeout,
+     Runner-Neustart), bleiben die Teildaten erhalten statt gar keiner.
+     abgeschlossen:false markiert solche Fragmente als unvollständig. */
+  const t0Lauf = Date.now();
+  const gestartetUtc = new Date().toISOString();
+  const schreibeJson = abgeschlossen => {
+    if (!AB.json) return;
+    raw.konfig = {A: AB.A.spec || 'Standard', B: AB.B.spec || 'Standard',
+                  budgetMs: AB.budget, komi: AB.komi,
+                  seed: AB.seed, modus: AB.paired > 0 ? 'paired' : 'standard',
+                  gestartetUtc,
+                  lauf: process.env.GITHUB_RUN_NUMBER || null,
+                  commit: process.env.GITHUB_SHA || null,
+                  dauerMin: Math.round((Date.now() - t0Lauf) / 600) / 100,
+                  abgeschlossen,
+                  netz: AB.net || null, netzSpiele: AB.netGames,
+                  netzVorwaertslaeufe: netAufrufe, netzGeblendet: netGeblendet};
+    require('fs').writeFileSync(AB.json, JSON.stringify(raw, null, 1));
+  };
+
   if (AB.paired > 0) {
     /* ═══ Paar-Modus ═══ */
     console.log('Modus: ' + AB.paired + ' Paare · Eröffnung ' + AB.opening
@@ -1195,10 +1258,12 @@ const driver = `
         if (g1.winner === 1) konKordantS++; else konKordantW++;
       } else typ = 'geteilt (je Farbe 1)';
       raw.paare.push({paar: p + 1, typ,
+        dauerMin: Math.round(mins * 100) / 100,
         g1: {sieger: g1.winner === 1 ? 'S' : 'W', zuege: g1.moves,
              stand: g1.score.b + ' : ' + g1.score.w.toFixed(1)},
         g2: {sieger: g2.winner === 1 ? 'S' : 'W', zuege: g2.moves,
              stand: g2.score.b + ' : ' + g2.score.w.toFixed(1)}});
+      schreibeJson(false);
       console.log('Paar ' + (p + 1) + '/' + AB.paired + ': ' + typ
         + '  (g1 ' + raw.paare[p].g1.sieger + ' ' + raw.paare[p].g1.stand
         + ' · g2 ' + raw.paare[p].g2.sieger + ' ' + raw.paare[p].g2.stand
@@ -1234,8 +1299,10 @@ const driver = `
         q50: {S: r.q50[1], W: r.q50[2]}, q75: {S: r.q75[1], W: r.q75[2]},
         simsA: r.st[aColor].moves ? Math.round(r.st[aColor].sims / r.st[aColor].moves) : 0,
         simsB: r.st[aColor === 1 ? 2 : 1].moves
-          ? Math.round(r.st[aColor === 1 ? 2 : 1].sims / r.st[aColor === 1 ? 2 : 1].moves) : 0
+          ? Math.round(r.st[aColor === 1 ? 2 : 1].sims / r.st[aColor === 1 ? 2 : 1].moves) : 0,
+        dauerMin: Math.round(mins * 100) / 100
       });
+      schreibeJson(false);
       console.log('Partie ' + (g + 1) + '/' + AB.games + ': A=' + (aIsBlack ? 'Schwarz' : 'Weiß')
         + ' → ' + (w.aWon ? 'A' : 'B') + ' (' + (r.winner === 1 ? 'S' : 'W') + ')'
         + (r.resignedBy ? ' Aufgabe' : ' ' + r.score.b + ' : ' + r.score.w.toFixed(1))
@@ -1248,12 +1315,7 @@ const driver = `
   }
 
   if (AB.json) {
-    raw.konfig = {A: AB.A.spec || 'Standard', B: AB.B.spec || 'Standard',
-                  budgetMs: AB.budget, komi: AB.komi,
-                  seed: AB.seed, modus: AB.paired > 0 ? 'paired' : 'standard',
-                  netz: AB.net || null, netzSpiele: AB.netGames,
-                  netzVorwaertslaeufe: netAufrufe, netzGeblendet: netGeblendet};
-    require('fs').writeFileSync(AB.json, JSON.stringify(raw, null, 1));
+    schreibeJson(true);
     console.log('Rohdaten → ' + AB.json);
   }
 })
