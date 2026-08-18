@@ -143,12 +143,30 @@ denn `netMaxBlend` bleibt in beiden Fällen 0. Die Rechenzeit ist besser in
 Kopfgüte investiert (andere Architektur) als in die genauere Vermessung einer
 Dosis, deren bester Fall „nicht von Ausschalten zu unterscheiden" ist.
 
-**Was ein Abschluss kosten würde.** Um 41,7 % gegen 50 % mit 80 % Power zu
-belegen, braucht es ≈ 277 Partien = 138 Paare ≈ 6,1 h Rechenzeit; für 45 %
-wären es 776 Partien ≈ 17 h. Der Effekt, wenn es einen gibt, liegt unter dem
-Rauschboden dieser Laufgröße. Wer die Frage schließen will, muss diese
-Partienzahl einplanen — oder die Kopfgüte so weit heben, dass der Effekt
-größer wird als das Rauschen.
+**Warum die 277 Partien entfallen — und zwar nicht aus Kostengründen.**
+Rein statistisch wären sie nötig: 41,7 % gegen 50 % mit 80 % Power braucht
+≈ 277 Partien = 138 Paare ≈ 6,1 h, für 45 % wären es 776 Partien ≈ 17 h.
+
+Entscheidend ist aber, **welche Frage** sie beantworten sollten. Aus
+Siegquoten lässt sich die **Kurvenform** rekonstruieren — steigt sie noch,
+oder liegt der Peak schon dahinter? Genau dafür wurde bei `mctsValueScale`
+über sieben Skalenpunkte gemessen (Plateau 150–250, `ab-harness.js:233`), und
+genau dafür braucht man viele Partien, weil Form aus verrauschten Quoten
+zusammengesetzt werden muss.
+
+Diese Frage ist hier nicht mehr offen, weil der tragende Befund **keine
+Siegquote** ist. Der Gap von 0,0–0,5 kommt aus einer direkten Messung der
+`evaluateMove`-Scores an der Entscheidungsgrenze (`spanne_check.js`) — er ist
+strukturell, nicht statistisch, und wird durch mehr Partien nicht sicherer.
+Dieselbe Art von Beleg wie bei `scoreWeight`, das die Summe der Blend-Gewichte
+„unbemerkt von 1 abweichen" ließ (`index.html:3631`): auch das wurde durch
+Hinsehen im Code entschieden, nicht durch Partien.
+
+Die Begründung ist damit von „Kurvenform, die mehr Daten braucht" auf
+„Mechanismus, der bereits feststeht" gewechselt. Der Lauf entfällt nicht,
+weil er sich nicht lohnt, sondern weil seine Frage beantwortet ist. Wer die
+Sache weiterbringen will, hebt die Kopfgüte — das ändert den Mechanismus,
+nicht nur die Fehlerbalken um ihn herum.
 
 Nach der Hausregel „Erstlauf ist Hypothese" stehen zwei unabhängige Läufe
 dahinter, und sie sind **nicht gleich stark**:

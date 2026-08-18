@@ -504,6 +504,19 @@
    2.9 ms gegen ~150000 ms Partiedauer, also 0.002 %.
    REGEL: Laufzeit-Vergleiche zweier Codestaende NIE blockweise, immer
    alternierend — sonst misst man den Runner, nicht den Code.
+
+   UND DIE UMKEHRUNG, die Partien SPART: nicht jede Frage ist
+   statistisch. Aus Siegquoten muss man Kurvenform rekonstruieren —
+   steigt sie noch, oder liegt der Peak dahinter? Dafuer braucht es
+   viele Partien, siehe die sieben Skalenpunkte fuer mctsValueScale
+   oben. Eine STRUKTURELLE Aussage dagegen wird durch mehr Partien
+   nicht sicherer: dass scoreWeight die Summe der Blend-Gewichte von 1
+   abweichen liess (index.html:3631), wurde im Code entschieden; dass
+   der Abstand zwischen bestem und zweitbestem evaluateMove-Score in
+   Eroeffnung und Mittelspiel bei 0.0-0.5 liegt, ebenso
+   (distillation/spanne_check.js). Vor jedem langen Lauf lohnt daher
+   die Frage, ob die offene Groesse eine Quote oder ein Mechanismus
+   ist — im zweiten Fall ersetzt Hinsehen das Spielen.
    Nicht belegte, aber passende Lesart: Der Schalter schiebt den
    Kipppunkt von 16 auf 22, ueber den nominellen Punkt hinaus. Ist
    die fruehe Uebergabe an den taktischen Experten gut, waere
