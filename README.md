@@ -85,9 +85,11 @@ nichts zu installieren.
   monoton und ohne Plateau — Top-1 0,40 % → 1,20 % und Top-10 3,74 % → 8,94 %
   über 15 k bis 120 k Zeilen, wobei der Trainingsverlust dabei von 1,85 auf
   4,10 *steigt*: das Netz verlässt den Memorierbereich. Benutzt wurden bisher
-  vier `val/`-Shards; verfügbar sind **8160 `train/`-Shards**, von denen einer
-  allein die 120-k-Grenze füllt. Die höchste Hebelwirkung liegt damit in der
-  Datenpipeline. Ob das der Spielstärke hilft, ist **nicht** gemessen.
+  vier `val/`-Shards mit zusammen 61 363 Zeilen; verfügbar sind **8160
+  `train/`-Shards**, und die sind 22,7× größer (348 571 nutzbare Zeilen gegen
+  15 388) — hochgerechnet rund 2,8 Milliarden Stellungen, von denen der
+  Referenzlauf **0,002 %** gesehen hat. Die höchste Hebelwirkung liegt damit
+  in der Datenpipeline. Ob das der Spielstärke hilft, ist **nicht** gemessen.
 
 ## Architektur
 

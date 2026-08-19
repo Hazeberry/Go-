@@ -233,10 +233,19 @@ knapp über der Zufallserwartung von 0,28 %. Auswendiglernen bei
 Zufallsniveau im Test ist der Lehrbuchbefund für ein überparametrisiertes
 Netz. Ab 120 000 Zeilen kann es nicht mehr memorieren und lernt Übertragbares.
 
-**Verfügbar sind 8160 `train/`-Shards gegen 20 in `val/`.** Ein einzelner
-train-Shard füllte die Obergrenze von 120 000 Zeilen allein. Die 61 363 Zeilen
-des Referenzlaufs stammten aus vier val-Shards, also etwa **0,05 %** des
-Datensatzes. `decode.py` hatte die Konstante `TRAIN` von Anfang an definiert,
+**Verfügbar sind 8160 `train/`-Shards gegen 20 in `val/`, und sie sind
+ungleich groß** — das ist der Grund, warum ein einzelner train-Shard die
+Obergrenze von 120 000 Zeilen allein füllte:
+
+| Shard | Zeilen gesamt | davon 19×19 nutzbar |
+|---|---|---|
+| `val/data0_0` | 21 830 | 15 388 |
+| `train/data0_0_0` | 498 535 | 348 571 |
+
+Ein train-Shard trägt also 22,7× so viel wie ein val-Shard. Hochgerechnet auf
+8160 Shards (nur Shard 0 gemessen) sind das rund **2,8 Milliarden** nutzbare
+Stellungen; die 61 363 Zeilen des Referenzlaufs entsprechen etwa **0,002 %**
+davon. `decode.py` hatte die Konstante `TRAIN` von Anfang an definiert,
 `bauen()` hat sie nie benutzt.
 
 Zwei Vorbehalte, vorab notiert:
