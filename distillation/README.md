@@ -198,8 +198,78 @@ werden; die beiden Läufe oben sind es, weil Lauf 1 ohne `--seed` auf
 Die Kette selbst ist damit **nicht** widerlegt: Schritte 1, 2 und 5 schließen
 Merkmals-, Kanal- und Exportfehler aus, und ein Auswendiglern-Test (2000
 Zeilen, `lr 0.5`) treibt den Verlust auf 0,10 und Top-1 auf 0,9935 — Modell,
-Ziele und Gradient funktionieren. Was fehlt, ist Kapazität und Datenmenge:
-3971→128→361 auf 56 k Beispielen generalisiert kaum.
+Ziele und Gradient funktionieren. Was fehlt, ist **Datenmenge** — nicht
+Kapazität (siehe unten, das war hier zunächst falsch benannt).
+
+### Der Engpass ist die Datenmenge, und das ist gemessen
+
+Die Kapazitätsrechnung: `3971→128→361` hat 508 288 + 46 208 + 489 =
+**554 985 Parameter**, trainiert wurde auf 56 363 Beispielen. Das sind
+**9,8× mehr Parameter als Beispiele** — Kapazität ist im Überschuss, nicht
+knapp. Eine frühere Fassung dieser Datei nannte „Kapazität und Datenmenge";
+der erste Teil war falsch.
+
+`datenkurve.py` misst die Abhängigkeit direkt. Testsatz sind dieselben 5000
+Zeilen wie im Referenzlauf, Hyperparameter identisch (`lr 0.5`, 40 Epochen),
+Trainingsdaten aus `train/`-Shards:
+
+| Trainingszeilen | Top-1 | Top-10 | Ø Rang | Trainingsverlust |
+|---|---|---|---|---|
+| 15 000 | 0,40 % | 3,74 % | 163,7 | 1,85 |
+| 30 000 | 0,52 % | 4,00 % | 156,8 | 3,64 |
+| 60 000 | 0,68 % | 6,10 % | 137,1 | 3,21 |
+| 120 000 | 1,20 % | 8,94 % | 125,7 | 4,10 |
+
+Monoton in allen drei Kennzahlen, **ohne Plateau**. Über 8× Daten verdreifacht
+sich Top-1, Top-10 wird 2,4-mal so groß, und der letzte Verdopplungsschritt
+bringt den größten Sprung (+0,52 Prozentpunkte gegen +0,16 davor) — die Kurve
+sättigt nicht.
+
+Die Verlustspalte ist der zweite, unabhängige Beleg und liest sich zunächst
+falsch: der Trainingsverlust **steigt** von 1,85 auf 4,10, während die
+Testwerte besser werden. Bei 15 000 Zeilen ist Verlust 1,85 gegen
+`ln(361) = 5,89` bereits Memorieren — und die Testleistung liegt mit 0,40 %
+knapp über der Zufallserwartung von 0,28 %. Auswendiglernen bei
+Zufallsniveau im Test ist der Lehrbuchbefund für ein überparametrisiertes
+Netz. Ab 120 000 Zeilen kann es nicht mehr memorieren und lernt Übertragbares.
+
+**Verfügbar sind 8160 `train/`-Shards gegen 20 in `val/`, und sie sind
+ungleich groß** — das ist der Grund, warum ein einzelner train-Shard die
+Obergrenze von 120 000 Zeilen allein füllte:
+
+| Shard | Zeilen gesamt | davon 19×19 nutzbar |
+|---|---|---|
+| `val/data0_0` | 21 830 | 15 388 |
+| `train/data0_0_0` | 498 535 | 348 571 |
+
+Ein train-Shard trägt also 22,7× so viel wie ein val-Shard. Hochgerechnet auf
+8160 Shards (nur Shard 0 gemessen) sind das rund **2,8 Milliarden** nutzbare
+Stellungen; die 61 363 Zeilen des Referenzlaufs entsprechen etwa **0,002 %**
+davon. `decode.py` hatte die Konstante `TRAIN` von Anfang an definiert,
+`bauen()` hat sie nie benutzt.
+
+Zwei Vorbehalte, vorab notiert:
+
+- Es sind Einzelmessungen der letzten Epoche. Top-1 schwankte im Referenzlauf
+  zwischen Epoche 33 und 40 von 0,94 % bis 1,52 %; die einzelnen Punkte tragen
+  also ±0,25 Prozentpunkte. Die Monotonie über 8× Spannweite trägt trotzdem.
+- Die Absolutwerte sind **nicht** direkt mit dem Referenzlauf vergleichbar.
+  Der trainierte auf val-Shards, diese Kurve auf train-Shards, bei identischem
+  Testsatz. Dass 60 000 train-Zeilen nur 0,68 % erreichen, wo 56 363
+  val-Zeilen 1,2 % ergaben, kann Verteilungsunterschied zwischen den
+  Verzeichnissen sein oder Epochenrauschen — ungeklärt.
+
+**Keine Spielstärkemessung.** Die Kurve sind Trainingskennzahlen; ob ein Netz
+mit 120 000 Zeilen der Engine hilft, ist nicht gemessen. Nach der
+Dosis-Wirkungs-Kurve wäre das erst sinnvoll, wenn Top-1 um Größenordnungen
+steigt, nicht um Prozente.
+
+**Die höchste Hebelwirkung liegt damit in der Datenpipeline**, nicht in
+Merkmalsform oder Kapazität. Der bindende Engpass ist jetzt Speicher:
+3971 float32 je Zeile sind 1,9 GB für 120 000 Zeilen, und `train.py` hält
+alles im RAM. Bei 650–1100 Nichtnullen von 3971 wäre eine dünn besetzte
+Darstellung rund 4× sparsamer; alternativ Minibatches von Platte streamen.
+Beides ist überschaubar, aber ungebaut.
 
 ### Zwei Fallen, die dabei aufgefallen sind
 
