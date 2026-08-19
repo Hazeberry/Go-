@@ -79,6 +79,16 @@ nichts zu installieren.
   der Prior bei jeder Skala — und ein Netz mit Top-1 1,2 % bringt dort fast
   Zufall ein.
 
+  Und die Kopfgüte hängt an der **Datenmenge**, nicht an Kapazität oder
+  Merkmalsform: 554 985 Parameter auf 56 363 Beispiele waren 9,8×
+  überparametrisiert. Eine Datenmengen-Kurve bei identischem Testsatz steigt
+  monoton und ohne Plateau — Top-1 0,40 % → 1,20 % und Top-10 3,74 % → 8,94 %
+  über 15 k bis 120 k Zeilen, wobei der Trainingsverlust dabei von 1,85 auf
+  4,10 *steigt*: das Netz verlässt den Memorierbereich. Benutzt wurden bisher
+  vier `val/`-Shards; verfügbar sind **8160 `train/`-Shards**, von denen einer
+  allein die 120-k-Grenze füllt. Die höchste Hebelwirkung liegt damit in der
+  Datenpipeline. Ob das der Spielstärke hilft, ist **nicht** gemessen.
+
 ## Architektur
 
 Eine Datei, drei Skriptblöcke — bewusst so, damit die Engine ohne Build-Schritt
