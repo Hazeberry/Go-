@@ -248,6 +248,37 @@ Stellungen; die 61 363 Zeilen des Referenzlaufs entsprechen etwa **0,002 %**
 davon. `decode.py` hatte die Konstante `TRAIN` von Anfang an definiert,
 `bauen()` hat sie nie benutzt.
 
+Die Hochrechnung von einem Shard auf 8160 stützt sich darauf, dass der
+**nutzbare Anteil in beiden Klassen fast gleich ist**: 15 388/21 830 = 70,5 %
+gegen 348 571/498 535 = 69,9 %. Die 22,7× sind ein reiner Größenunterschied
+der Shards, kein Unterschied in der Zusammensetzung — die
+Brettgrößenverteilung ist dieselbe. Als Größenordnungsaussage trägt die Zahl
+damit; als exakte Bestandsangabe nicht, dafür ist nur ein train-Shard gezählt.
+
+### Was der Bestand an Speicher kostet — und warum daraus Streaming folgt
+
+Der Merkmalsvektor hat 3971 Einträge, im Median **788 Nichtnullen** (632 bis
+1155), und nimmt nur **10 verschiedene Werte** an (Vielfache von 1/19). Die
+Quantisierung auf uint8 ist damit **verlustfrei**, nicht approximativ:
+
+| Format | B/Zeile | Faktor | 2,8 Mrd Zeilen |
+|---|---|---|---|
+| dicht `float32` | 15 884 | 1× | **45 TB** |
+| sparse `uint16`-Index + `float32` | 4 728 | 3,4× | 13 TB |
+| sparse `uint16`-Index + `uint8` | 2 364 | 6,7× | 7 TB |
+
+Daraus folgt die Aufteilung, und sie ist kein Entweder-oder: **Streaming ist
+der einzige Weg für den vollen Bestand** — auch sparse bleibt im TB-Bereich,
+also weit jenseits jedes RAM. **Sparse ist das Format für den
+Arbeitsausschnitt**: bei 6 B je Nichtnull sind 1 Mio Zeilen 4,7 GB und 2 Mio
+Zeilen 9,5 GB, 10 Mio wären es nicht mehr.
+
+`train.py` hält heute alles im RAM und ist bei 120 000 Zeilen am Ende — das
+sind **0,004 %** des Bestands, rund vier Größenordnungen darunter. Jede
+Änderung Richtung Streaming verschiebt diese Wand; ein A/B braucht sie nicht
+zur Rechtfertigung, weil sie nur den Durchsatz betrifft und nicht die
+Spielweise. Gemessen werden muss erst das Netz, das dabei herauskommt.
+
 Zwei Vorbehalte, vorab notiert:
 
 - Es sind Einzelmessungen der letzten Epoche. Top-1 schwankte im Referenzlauf

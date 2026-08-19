@@ -87,9 +87,13 @@ nichts zu installieren.
   4,10 *steigt*: das Netz verlässt den Memorierbereich. Benutzt wurden bisher
   vier `val/`-Shards mit zusammen 61 363 Zeilen; verfügbar sind **8160
   `train/`-Shards**, und die sind 22,7× größer (348 571 nutzbare Zeilen gegen
-  15 388) — hochgerechnet rund 2,8 Milliarden Stellungen, von denen der
-  Referenzlauf **0,002 %** gesehen hat. Die höchste Hebelwirkung liegt damit
-  in der Datenpipeline. Ob das der Spielstärke hilft, ist **nicht** gemessen.
+  15 388) — hochgerechnet von einem gemessenen train-Shard rund 2,8 Milliarden
+  Stellungen, von denen der Referenzlauf **0,002 %** gesehen hat. Die höchste
+  Hebelwirkung liegt damit in der Datenpipeline, und dort im **Durchsatz**,
+  nicht in der Verfügbarkeit: dicht gespeichert wären das 45 TB, sparse noch
+  7–13 TB. Streaming ist der einzige Weg für den vollen Bestand, sparse das
+  RAM-Format für den Arbeitsausschnitt. Ob all das der Spielstärke hilft, ist
+  **nicht** gemessen.
 
 ## Architektur
 
