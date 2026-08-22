@@ -39,7 +39,7 @@ Ein vollständiger Durchlauf, jeder Schritt einzeln geprüft:
 | 1. Merkmale | 8 Bretter, **0 Abweichungen** numpy gegen JS |
 | 2. Kanäle | 400 Stellungen Freiheiten nachgerechnet, **0 Abweichungen**; Kanal 9 zu 100 % gegnerisch |
 | 3. Daten | 61 363 Zeilen aus vier val-Shards, 3 wegen besetztem Ziel verworfen |
-| 4. Training | Verlust 5,88 → 4,08; Top-1 1,2 %, Top-10 7,8 % (Zufall 0,28 % / 2,77 %) |
+| 4. Training | Verlust 5,88 → 4,08; Top-1 1,2 %, Top-10 7,8 % (Zufall 0,28 % / 2,77 %) — Endwerte dieses Referenzlaufs auf val-Shards, nicht zu verwechseln mit der Datenmengen-Kurve weiter unten |
 | 5. Export | max. Abweichung 2,4e-07, argmax 8/8 gleich |
 | 6. Spielstärke | kein Gewinn bei vier Läufen über 250-fache Skalenspanne: 35,0 % (5000), 41,7 % (800), 46,7 % (20→1000) |
 
@@ -136,12 +136,6 @@ proportional zur Dosis, kein Optimum dazwischen.
 Kalibrierung ist damit als Erklärung **erschöpft**, nicht offen. Der Engpass
 ist die Kopfgüte: Top-1 1,2 % entscheidet dort, wo die Heuristik indifferent
 ist (Gap ≈ 0), und bringt dort fast Zufall ein.
-
-**Konsequenz für die 277 Partien.** Sie würden jetzt nur noch klären, ob
-Skala 20 bei 46,7 % oder bei 50 % liegt — eine Frage ohne Handlung dahinter,
-denn `netMaxBlend` bleibt in beiden Fällen 0. Die Rechenzeit ist besser in
-Kopfgüte investiert (andere Architektur) als in die genauere Vermessung einer
-Dosis, deren bester Fall „nicht von Ausschalten zu unterscheiden" ist.
 
 **Warum die 277 Partien entfallen — und zwar nicht aus Kostengründen.**
 Rein statistisch wären sie nötig: 41,7 % gegen 50 % mit 80 % Power braucht
@@ -348,6 +342,37 @@ verschweigt, ob eine Zeile oder tausende betroffen sind.
 | `train.py` | Kreuzentropie auf den gespielten Zug, Export als `go_pnet`-JSON. |
 | `export_check.js` + `export_check.py` | Vergleicht die Priors aus numpy und JS nach dem Export. Zuletzt: max. **1.9e-9**, argmax 8/8 gleich. |
 | `collect.js` + `json2npz.py` | Ersatzdaten aus unserem eigenen Selbstspiel — um die Kette ohne KataGo zu testen. |
+| `spanne_check.js` | Misst die Entscheidungsspanne von `evaluateMove` über alle legalen Züge. Gemessen: Spanne zum Median 45–1206, Abstand zum Zweitbesten aber 0,0–0,5. |
+| `datenkurve.py` | Datenmengen-Kurve mit Fehlerbalken, misst jede Epoche. Beantwortet, ob die Kopfgüte an der Datenmenge hängt oder an der Merkmalsform. |
+| `lokalitaet_check.js` | Gate-Sweep für `localityBonus`: ab welcher Dosis kippt die Zugwahl? Sekunden statt Partien — liefert den Wert, den ein A/B testen sollte. |
+
+### Gap oder Spanne? Der Bezug hängt vom Term ab
+
+`lokalitaet_check.js` hat eine Ableitung widerlegt, die aus `spanne_check.js`
+naheliegend schien. Weil der Abstand zwischen bestem und zweitbestem
+`evaluateMove`-Score in Eröffnung und Mittelspiel nur 0,0–0,5 beträgt, lag der
+Schluss nahe, schon ein `localityBonus` von wenigen Dutzend müsse die Spitze
+kippen. Gemessen kippt sie erst bei **200–400**.
+
+Der Grund: bester und zweitbester Zug liegen oft **nebeneinander**. Ein
+Lokalitätsterm gibt beiden fast denselben Zuschlag und verschiebt die
+Reihenfolge nicht. Um die Spitze zu kippen, muss er einen *entfernten*
+Kandidaten hochziehen — dafür zählt die volle Score-Spanne, nicht der Gap.
+
+**Daraus die Regel:** die Gap-Kalibrierung gilt für Terme, die je Zug
+**unabhängig** wirken (wie `netScoreScale` mit einem Prior pro Punkt), nicht
+für **räumlich korrelierte**. Sichtbar an der Top-20-Spalte des Sweeps: das
+Mittelfeld sortiert sich lange um, bevor die Spitze sich bewegt. Der alte
+Vermerk bei `localityBonus` in `index.html` („bis 200 bewegt der Bonus die
+Rangfolge nicht, ab 400 dominiert er") trifft damit zu; 200 ist die Kante und
+der Wert, den ein A/B testen sollte.
+
+Und eine Falle, die der Sweep selbst aufgedeckt hat: `evaluateMove` ist ohne
+Vorkehrung **zwischen zwei Aufrufen nicht reproduzierbar**, der Zufallsstrom
+läuft weiter. Der erste Lauf zeigte bereits in der Dosis-0-Spalte Änderungen
+gegen sich selbst — jeder Dosisvergleich wäre ein Vergleich zweier
+Zufallsziehungen gewesen. Die Spalte bleibt deshalb als Sanity-Check stehen:
+steht dort nicht überall 0, ist der Lauf ungültig.
 
 ## Warum jedes Glied einzeln geprüft wird
 
