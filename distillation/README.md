@@ -348,6 +348,37 @@ verschweigt, ob eine Zeile oder tausende betroffen sind.
 | `train.py` | Kreuzentropie auf den gespielten Zug, Export als `go_pnet`-JSON. |
 | `export_check.js` + `export_check.py` | Vergleicht die Priors aus numpy und JS nach dem Export. Zuletzt: max. **1.9e-9**, argmax 8/8 gleich. |
 | `collect.js` + `json2npz.py` | Ersatzdaten aus unserem eigenen Selbstspiel — um die Kette ohne KataGo zu testen. |
+| `spanne_check.js` | Misst die Entscheidungsspanne von `evaluateMove` über alle legalen Züge. Gemessen: Spanne zum Median 45–1206, Abstand zum Zweitbesten aber 0,0–0,5. |
+| `datenkurve.py` | Datenmengen-Kurve mit Fehlerbalken, misst jede Epoche. Beantwortet, ob die Kopfgüte an der Datenmenge hängt oder an der Merkmalsform. |
+| `lokalitaet_check.js` | Gate-Sweep für `localityBonus`: ab welcher Dosis kippt die Zugwahl? Sekunden statt Partien — liefert den Wert, den ein A/B testen sollte. |
+
+### Gap oder Spanne? Der Bezug hängt vom Term ab
+
+`lokalitaet_check.js` hat eine Ableitung widerlegt, die aus `spanne_check.js`
+naheliegend schien. Weil der Abstand zwischen bestem und zweitbestem
+`evaluateMove`-Score in Eröffnung und Mittelspiel nur 0,0–0,5 beträgt, lag der
+Schluss nahe, schon ein `localityBonus` von wenigen Dutzend müsse die Spitze
+kippen. Gemessen kippt sie erst bei **200–400**.
+
+Der Grund: bester und zweitbester Zug liegen oft **nebeneinander**. Ein
+Lokalitätsterm gibt beiden fast denselben Zuschlag und verschiebt die
+Reihenfolge nicht. Um die Spitze zu kippen, muss er einen *entfernten*
+Kandidaten hochziehen — dafür zählt die volle Score-Spanne, nicht der Gap.
+
+**Daraus die Regel:** die Gap-Kalibrierung gilt für Terme, die je Zug
+**unabhängig** wirken (wie `netScoreScale` mit einem Prior pro Punkt), nicht
+für **räumlich korrelierte**. Sichtbar an der Top-20-Spalte des Sweeps: das
+Mittelfeld sortiert sich lange um, bevor die Spitze sich bewegt. Der alte
+Vermerk bei `localityBonus` in `index.html` („bis 200 bewegt der Bonus die
+Rangfolge nicht, ab 400 dominiert er") trifft damit zu; 200 ist die Kante und
+der Wert, den ein A/B testen sollte.
+
+Und eine Falle, die der Sweep selbst aufgedeckt hat: `evaluateMove` ist ohne
+Vorkehrung **zwischen zwei Aufrufen nicht reproduzierbar**, der Zufallsstrom
+läuft weiter. Der erste Lauf zeigte bereits in der Dosis-0-Spalte Änderungen
+gegen sich selbst — jeder Dosisvergleich wäre ein Vergleich zweier
+Zufallsziehungen gewesen. Die Spalte bleibt deshalb als Sanity-Check stehen:
+steht dort nicht überall 0, ist der Lauf ungültig.
 
 ## Warum jedes Glied einzeln geprüft wird
 
