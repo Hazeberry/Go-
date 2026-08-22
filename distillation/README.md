@@ -39,7 +39,7 @@ Ein vollständiger Durchlauf, jeder Schritt einzeln geprüft:
 | 1. Merkmale | 8 Bretter, **0 Abweichungen** numpy gegen JS |
 | 2. Kanäle | 400 Stellungen Freiheiten nachgerechnet, **0 Abweichungen**; Kanal 9 zu 100 % gegnerisch |
 | 3. Daten | 61 363 Zeilen aus vier val-Shards, 3 wegen besetztem Ziel verworfen |
-| 4. Training | Verlust 5,88 → 4,08; Top-1 1,2 %, Top-10 7,8 % (Zufall 0,28 % / 2,77 %) |
+| 4. Training | Verlust 5,88 → 4,08; Top-1 1,2 %, Top-10 7,8 % (Zufall 0,28 % / 2,77 %) — Endwerte dieses Referenzlaufs auf val-Shards, nicht zu verwechseln mit der Datenmengen-Kurve weiter unten |
 | 5. Export | max. Abweichung 2,4e-07, argmax 8/8 gleich |
 | 6. Spielstärke | kein Gewinn bei vier Läufen über 250-fache Skalenspanne: 35,0 % (5000), 41,7 % (800), 46,7 % (20→1000) |
 
@@ -136,12 +136,6 @@ proportional zur Dosis, kein Optimum dazwischen.
 Kalibrierung ist damit als Erklärung **erschöpft**, nicht offen. Der Engpass
 ist die Kopfgüte: Top-1 1,2 % entscheidet dort, wo die Heuristik indifferent
 ist (Gap ≈ 0), und bringt dort fast Zufall ein.
-
-**Konsequenz für die 277 Partien.** Sie würden jetzt nur noch klären, ob
-Skala 20 bei 46,7 % oder bei 50 % liegt — eine Frage ohne Handlung dahinter,
-denn `netMaxBlend` bleibt in beiden Fällen 0. Die Rechenzeit ist besser in
-Kopfgüte investiert (andere Architektur) als in die genauere Vermessung einer
-Dosis, deren bester Fall „nicht von Ausschalten zu unterscheiden" ist.
 
 **Warum die 277 Partien entfallen — und zwar nicht aus Kostengründen.**
 Rein statistisch wären sie nötig: 41,7 % gegen 50 % mit 80 % Power braucht
