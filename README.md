@@ -82,9 +82,10 @@ nichts zu installieren.
   Und die Kopfgüte hängt an der **Datenmenge**, nicht an Kapazität oder
   Merkmalsform: 554 985 Parameter auf 56 363 Beispiele waren 9,8×
   überparametrisiert. Eine Datenmengen-Kurve bei identischem Testsatz steigt
-  monoton und ohne Plateau — Top-1 0,40 % → 1,20 % und Top-10 3,74 % → 8,94 %
-  über 15 k bis 120 k Zeilen, wobei der Trainingsverlust dabei von 1,85 auf
-  4,10 *steigt*: das Netz verlässt den Memorierbereich. Benutzt wurden bisher
+  monoton und ohne Plateau — Top-1 0,37 % → 0,99 % und Top-10 3,77 % → 8,24 %
+  (Mittel über die letzten zehn Epochen, Endpunkte rund 4 SD getrennt)
+  über 15 k bis 120 k Zeilen, wobei der Trainingsverlust dabei von 2,43 auf
+  4,21 *steigt*: das Netz verlässt den Memorierbereich. Benutzt wurden bisher
   vier `val/`-Shards mit zusammen 61 363 Zeilen; verfügbar sind **8160
   `train/`-Shards**, und die sind 22,7× größer (348 571 nutzbare Zeilen gegen
   15 388) — hochgerechnet von einem gemessenen train-Shard rund 2,8 Milliarden

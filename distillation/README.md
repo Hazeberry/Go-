@@ -213,23 +213,42 @@ der erste Teil war falsch.
 Zeilen wie im Referenzlauf, Hyperparameter identisch (`lr 0.5`, 40 Epochen),
 Trainingsdaten aus `train/`-Shards:
 
-| Trainingszeilen | Top-1 | Top-10 | Ø Rang | Trainingsverlust |
-|---|---|---|---|---|
-| 15 000 | 0,40 % | 3,74 % | 163,7 | 1,85 |
-| 30 000 | 0,52 % | 4,00 % | 156,8 | 3,64 |
-| 60 000 | 0,68 % | 6,10 % | 137,1 | 3,21 |
-| 120 000 | 1,20 % | 8,94 % | 125,7 | 4,10 |
+Gemessen wird **jede Epoche**, ausgewiesen ist der Mittelwert über die letzten
+zehn samt Standardabweichung. Ein Endwert allein ist eine Einzelziehung aus
+einer schwankenden Größe:
 
-Monoton in allen drei Kennzahlen, **ohne Plateau**. Über 8× Daten verdreifacht
-sich Top-1, Top-10 wird 2,4-mal so groß, und der letzte Verdopplungsschritt
-bringt den größten Sprung (+0,52 Prozentpunkte gegen +0,16 davor) — die Kurve
-sättigt nicht.
+| Trainingszeilen | Top-1 Ø ± SD | Top-10 Ø ± SD | Ø Rang | Verlust | Top-1 letzte Epoche |
+|---|---|---|---|---|---|
+| 15 000 | 0,37 % ± 0,07 | 3,77 % ± 0,16 | 161,2 ± 1,4 | 2,43 | 0,40 % |
+| 30 000 | 0,46 % ± 0,11 | 4,10 % ± 0,44 | 157,7 ± 2,6 | 3,82 | 0,52 % |
+| 60 000 | 0,65 % ± 0,11 | 5,77 % ± 0,26 | 140,6 ± 2,3 | 3,42 | 0,68 % |
+| 120 000 | **0,99 % ± 0,16** | 8,24 % ± 0,36 | 125,9 ± 2,1 | 4,21 | 1,20 % |
+
+Monoton in allen drei Kennzahlen, **ohne Plateau** — aber die Auflösung ist
+ungleich verteilt, und das ist der Grund, hier Fehlerbalken zu nennen statt
+Einzelwerte:
+
+- **Die Gesamtaussage trägt deutlich.** Endpunkte 0,37 ± 0,07 gegen
+  0,99 ± 0,16 liegen rund 4 SD auseinander; der mittlere Rang fällt von
+  161,2 auf 125,9 bei SD ≈ 2, also über 15 SD.
+- **Die Einzelschritte tragen überwiegend nicht.** Bei ±1 SD überlappen
+  15 k→30 k und 30 k→60 k; nur 60 k→120 k ist getrennt. Eine frühere Fassung
+  hob hervor, der letzte Verdopplungsschritt bringe den größten Sprung
+  (+0,52 gegen +0,16 Prozentpunkte) — **das liegt im Rauschen** und ist
+  gestrichen.
+- **Top-10 und Rang trennen sauberer als Top-1.** Wer die Kurve mit einer
+  Kennzahl belegen will, nimmt den Rang, nicht Top-1.
+
+Die frühere Fassung dieser Tabelle nannte Endwerte der letzten Epoche, darunter
+1,20 % bei 120 000 Zeilen. Über zehn Epochen gemittelt sind es 0,99 % — der
+Endwert war eine hohe Ziehung, innerhalb des damals deklarierten Vorbehalts von
+±0,25 Prozentpunkten, aber der Mittelwert ist die belastbarere Zahl.
 
 Die Verlustspalte ist der zweite, unabhängige Beleg und liest sich zunächst
-falsch: der Trainingsverlust **steigt** von 1,85 auf 4,10, während die
-Testwerte besser werden. Bei 15 000 Zeilen ist Verlust 1,85 gegen
-`ln(361) = 5,89` bereits Memorieren — und die Testleistung liegt mit 0,40 %
-knapp über der Zufallserwartung von 0,28 %. Auswendiglernen bei
+falsch: der Trainingsverlust **steigt** von 2,43 auf 4,21, während die
+Testwerte besser werden. Bei 15 000 Zeilen liegt er weit unter
+`ln(361) = 5,89`, das Netz memoriert also bereits — und die Testleistung liegt
+mit 0,37 % knapp über der Zufallserwartung von 0,28 %. Auswendiglernen bei
 Zufallsniveau im Test ist der Lehrbuchbefund für ein überparametrisiertes
 Netz. Ab 120 000 Zeilen kann es nicht mehr memorieren und lernt Übertragbares.
 
