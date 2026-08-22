@@ -341,7 +341,7 @@ verschweigt, ob eine Zeile oder tausende betroffen sind.
 
 | Datei | Aufgabe |
 |---|---|
-| `netzcheck.sh` | Sagt, **welcher** Host in der Allowlist fehlt. Die Shards liegen auf einem CDN, nicht auf `huggingface.co` — wer nur den Metadaten-Host freigibt, scheitert erst beim Download. |
+| `netzcheck.sh` | Sagt, **welcher** Host in der Allowlist fehlt — und ob es überhaupt die Allowlist ist. Die Shards liegen auf einem CDN, nicht auf `huggingface.co`: wer nur den Metadaten-Host freigibt, scheitert erst beim Download. Proxy-Ablehnung, fehlendes CA-Bundle und toter DNS scheitern alle gleich lautlos, brauchen aber drei verschiedene Reparaturen; darum wird curls Begründung mit ausgegeben. |
 | `features.py` | `boardToInput` in numpy. Die riskanteste Stelle der Kette. |
 | `dump_boards.js` + `features_check.py` | Vergleicht `features.py` elementweise mit der JS-Fassung. Zuletzt: 8 Bretter vom leeren Brett bis Zug 330, mit und ohne Ko, **0 Abweichungen**. |
 | `decode.py` | KataGo-Shards lesen. `pruefen` verifiziert die Kanalbelegung, `bauen` schreibt `daten.npz`. |
